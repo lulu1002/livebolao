@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Painel admin · Bolão</title>
+  <meta name="theme-color" content="#14237A">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&display=swap">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="wrap wide admin-head">
+      <a class="brand" href="/admin">Bolão<small>Painel admin</small></a>
+      <div class="actions">
+        <a class="btn ghost small" href="/">Ver o site</a>
+        <button class="btn ghost small" id="logout" type="button" hidden>Sair</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap wide main">
+    <section id="login" class="panel narrow" hidden>
+      <h1>Acesso do admin</h1>
+      <form id="login-form">
+        <div class="field">
+          <label for="admin-pass">Senha do admin</label>
+          <input id="admin-pass" type="password" autocomplete="current-password" required>
+        </div>
+        <p class="error" id="login-error" role="alert"></p>
+        <button class="btn" type="submit">Entrar</button>
+      </form>
+    </section>
+
+    <div id="panel" hidden>
+      <div class="admin-grid">
+        <section class="panel" id="form-panel">
+          <h2 id="form-title">Nova enquete</h2>
+          <fieldset class="modes">
+            <legend>Ao publicar uma nova enquete</legend>
+            <label class="aopt"><input type="radio" name="mode" value="replace"><span>Substituir a enquete da página principal</span></label>
+            <label class="aopt"><input type="radio" name="mode" value="accumulate"><span>Acumular com as anteriores</span></label>
+            <span class="hint">Enquetes substituídas saem da página, mas continuam aqui no painel e valem pontos quando você define a resposta.</span>
+          </fieldset>
+          <form id="poll-form">
+            <div class="field">
+              <label for="f-title">Pergunta</label>
+              <input id="f-title" maxlength="200" required>
+            </div>
+            <div class="field">
+              <label for="f-desc">Descrição (opcional)</label>
+              <textarea id="f-desc" rows="3" maxlength="1000"></textarea>
+            </div>
+            <div class="field">
+              <label for="f-options">Opções</label>
+              <textarea id="f-options" rows="4" placeholder="Uma opção por linha"></textarea>
+              <span class="hint" id="f-options-hint">De 2 a 10 opções, uma por linha.</span>
+            </div>
+            <div class="field">
+              <label for="f-points">Pontos por acerto</label>
+              <input id="f-points" type="number" min="1" max="1000" step="1" value="10">
+            </div>
+            <div class="field">
+              <label for="f-closes">Votação encerra em (opcional)</label>
+              <input id="f-closes" type="datetime-local">
+              <span class="hint">Sem data, a votação fica aberta até você encerrar.</span>
+            </div>
+            <p class="error" id="form-error" role="alert"></p>
+            <div class="actions">
+              <button class="btn" id="form-submit" type="submit">Publicar enquete</button>
+              <button class="btn ghost" id="form-cancel" type="button" hidden>Cancelar edição</button>
+            </div>
+          </form>
+        </section>
+
+        <section>
+          <div class="list-head">
+            <h2 class="list-title" id="list-title">Enquetes</h2>
+            <button class="btn danger small" id="reset-ranking" type="button">Zerar ranking</button>
+          </div>
+          <div id="poll-list" class="alist"></div>
+        </section>
+      </div>
+
+      <details class="panel data">
+        <summary>Backup dos dados</summary>
+        <p>Os dados ficam no Supabase e não se perdem quando o Render reinicia. Se quiser uma cópia extra, baixe tudo em um arquivo JSON.</p>
+        <div class="actions">
+          <button class="btn ghost" id="backup" type="button">Baixar backup</button>
+        </div>
+      </details>
+    </div>
+  </main>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script src="/admin.js"></script>
+</body>
+</html>

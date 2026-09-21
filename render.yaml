@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: Isaroza-bolao
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Senha do painel /admin. O Render gera uma; veja em Environment.
+      - key: ADMIN_PASSWORD
+        generateValue: true
+      # Connection string do Supabase (session pooler)
+      - key: DATABASE_URL
+        value: postgresql://postgres.fqeuhtzmsqgbqktgxzlt:luian099887@aws-0-sa-east-1.pooler.supabase.com:5432/postgres
+      # Credenciais do app criado em dev.twitch.tv/console
+      - key: TWITCH_CLIENT_ID
+        value: x4qevszaoxnscv462g6913dzo3m71t
+      - key: TWITCH_CLIENT_SECRET
+        value: kfnrl6zh0759zq8f4r579qhtt9x0df

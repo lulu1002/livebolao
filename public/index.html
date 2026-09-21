@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bolão</title>
+  <meta name="theme-color" content="#14237A">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&display=swap">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="wrap">
+      <a class="brand" href="/">Bolão</a>
+      <nav class="tabs" role="tablist" aria-label="Seções">
+        <button type="button" role="tab" id="tab-polls" aria-controls="view-polls" aria-selected="true">Enquetes</button>
+        <button type="button" role="tab" id="tab-ranking" aria-controls="view-ranking" aria-selected="false">Ranking</button>
+      </nav>
+      <div class="who" id="who"></div>
+    </div>
+  </header>
+
+  <main class="wrap main">
+    <section id="view-polls" role="tabpanel" aria-labelledby="tab-polls">
+      <div id="polls" class="polls" aria-live="polite">
+        <p class="note">Carregando enquetes…</p>
+      </div>
+    </section>
+
+    <section id="view-ranking" role="tabpanel" aria-labelledby="tab-ranking" hidden>
+      <div id="ranking"></div>
+    </section>
+  </main>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script src="/app.js"></script>
+</body>
+</html>

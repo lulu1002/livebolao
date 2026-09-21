@@ -1,0 +1,17 @@
+{
+  "name": "bolao",
+  "version": "1.0.0",
+  "description": "Bolão de enquetes com ranking, login com Twitch e Supabase",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "pg": "^8.13.1"
+  }
+}
