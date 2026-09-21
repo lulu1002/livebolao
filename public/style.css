@@ -154,7 +154,7 @@ input:disabled, textarea:disabled { background: rgba(255, 255, 255, 0.5); color:
   display: grid;
   grid-template-columns: 9.5rem 1fr;
   border: 2px solid var(--ink);
-  border-radius: 4px;
+  border-radius: 8px;
   background: var(--ticket);
 }
 .stub {
@@ -164,6 +164,7 @@ input:disabled, textarea:disabled { background: rgba(255, 255, 255, 0.5); color:
   align-items: flex-start;
   padding: 1.1rem 1rem;
   border-right: 2px dashed var(--ink);
+  border-radius:5px;
 }
 .pts-n { display: block; font-stretch: 62%; font-weight: 900; font-size: 3.6rem; line-height: 0.85; }
 .pts-l { font-weight: 700; font-size: 0.95rem; }
