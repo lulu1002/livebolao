@@ -35,6 +35,11 @@ h1, h2, h3 {
 button, input, textarea { font: inherit; }
 :focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
 
+button::hover {
+   transform: translate(scale(1.1));
+  background: blue;
+}
+
 .wrap { width: min(100% - 2rem, 52rem); margin-inline: auto; }
 .wrap.wide { width: min(100% - 2rem, 66rem); }
 .main { padding-block: 1.75rem 4rem; }
