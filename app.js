@@ -123,7 +123,7 @@
   }
 
   function whenLabel(p) {
-    if (p.status === 'open') return p.closesAt ? `Fecha em ${fmtDate(p.closesAt)}` : 'Fecha quando o admiro encerrar';
+    if (p.status === 'open') return p.closesAt ? `Fecha em ${fmtDate(p.closesAt)}` : 'Fecha quando o admin encerrar';
     if (p.status === 'closed') return 'Aguardando resultado';
     return 'Resultado definido';
   }
@@ -131,7 +131,7 @@
   function noteFor(p) {
     if (p.status === 'open') {
       if (!state.user) {
-        return h('p', { class: 'note' }, 'Entre com a Twitch Meu nobre rlk para registrar seu palpite. ',
+        return h('p', { class: 'note' }, 'Entre com a Twitch para registrar seu palpite. ',
           h('a', { class: 'linkish', href: '/auth/twitch' }, 'Entrar'));
       }
       return h('p', { class: 'note' },
@@ -208,7 +208,7 @@
     }
     if (!state.polls.length) {
       box.append(h('div', { class: 'empty' },
-        h('p', {}, 'Ainda não há enquetes. Quando o alto escalao publicar a primeira, ela aparece aqui.')));
+        h('p', {}, 'Ainda não há enquetes. Quando o admin publicar a primeira, ela aparece aqui.')));
       return;
     }
     state.polls.forEach((p) => box.append(renderPoll(p)));
@@ -268,7 +268,7 @@
       return;
     }
     if (!r.resolved) {
-      box.append(h('p', { class: 'note' }, 'Os pontos aparecem quando o admiro definir a primeira resposta certa.'));
+      box.append(h('p', { class: 'note' }, 'Os pontos aparecem quando o admin definir a primeira resposta certa.'));
     }
     box.append(h('ol', { class: 'rank' }, r.ranking.map((s) => {
       const me = state.user && state.user.id === s.userId;
@@ -339,12 +339,13 @@
         stat('Posição', `${p.position}º`),
         stat('Pontos', p.points),
         stat('Acertos', `${p.hits}/${p.played}`, p.played ? `${p.accuracy}% de aproveitamento` : ''),
-        stat('Sequência', p.streak, `melhor: ${p.bestStreak}`)),
-      p.rule.every > 0
-        ? h('p', { class: 'note' },
-          `Bônus de sequência: +${p.rule.bonus} pontos a cada ${p.rule.every} acertos seguidos.` +
-          (p.bonus ? ` Já rendeu ${p.bonus} pontos.` : ''))
-        : null,
+        stat('Sequência', p.streak, `melhor: ${p.bestStreak}`)));
+    if (p.rule.every > 0) {
+      box.append(h('p', { class: 'note' },
+        `Bônus de sequência: +${p.rule.bonus} pontos a cada ${p.rule.every} acertos seguidos.` +
+        (p.bonus ? ` Já rendeu ${p.bonus} pontos.` : '')));
+    }
+    box.append(
       h('h3', { class: 'section-title' }, 'Histórico'),
       p.history.length
         ? h('ol', { class: 'hist' }, p.history.map(historyItem))
