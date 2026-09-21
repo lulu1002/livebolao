@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: Isaroza-bolao
+    name: bolao-isaroza
     runtime: node
     plan: free
     buildCommand: npm install
