@@ -47,8 +47,10 @@ create table if not exists awards (
   poll_title text not null,
   user_id    text not null references users(id) on delete cascade,
   hit        boolean not null,
-  points     integer not null
+  points     integer not null,
+  resolved_at timestamptz
 );
+alter table awards add column if not exists resolved_at timestamptz;
 create index if not exists awards_user_idx on awards(user_id);
 
 create table if not exists settings (

@@ -2,7 +2,7 @@
   'use strict';
 
   const $ = (sel, root = document) => root.querySelector(sel);
-  const state = { polls: [], users: 0, editing: null, mode: 'replace' };
+  const state = { polls: [], users: 0, editing: null, mode: 'replace', streak: { every: 0, bonus: 0 } };
 
   /* ---------- Utilidades ---------- */
   function h(tag, attrs = {}, ...children) {
@@ -108,7 +108,9 @@
       state.polls = data.polls;
       state.users = data.users;
       state.mode = data.mode;
+      state.streak = data.streak;
       renderMode();
+      renderStreak();
       renderList();
     } catch (e) {
       handleError(e);
@@ -313,6 +315,29 @@
   $('#reset-ranking').addEventListener('click', () => {
     if (!confirm('Zerar o ranking? Todos os pontos voltam para 0 e isso não pode ser desfeito. Considere baixar um backup antes.')) return;
     act(() => api('/api/admin/ranking/reset', { method: 'POST' }), 'Ranking zerado');
+  });
+
+  /* ---------- Bônus de sequência ---------- */
+  function renderStreak() {
+    $('#s-every').value = state.streak.every;
+    $('#s-bonus').value = state.streak.bonus;
+  }
+
+  $('#streak-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    $('#streak-error').textContent = '';
+    try {
+      await api('/api/admin/settings', {
+        method: 'POST',
+        body: { streakEvery: $('#s-every').value, streakBonus: $('#s-bonus').value },
+      });
+      const on = Number($('#s-every').value) > 0 && Number($('#s-bonus').value) > 0;
+      state.streak = { every: Number($('#s-every').value), bonus: Number($('#s-bonus').value) };
+      toast(on ? 'Bônus de sequência salvo' : 'Bônus de sequência desativado');
+    } catch (err) {
+      if (err.status === 401) handleError(err);
+      else $('#streak-error').textContent = err.message;
+    }
   });
 
   /* ---------- Backup ---------- */

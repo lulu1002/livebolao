@@ -85,9 +85,28 @@
         </section>
       </div>
 
+      <section class="panel data" id="streak-panel">
+        <h2>Bônus de sequência</h2>
+        <form id="streak-form">
+          <div class="streak-row">
+            <div class="field">
+              <label for="s-every">A cada quantos acertos seguidos</label>
+              <input id="s-every" type="number" min="0" max="50" step="1" value="0">
+            </div>
+            <div class="field">
+              <label for="s-bonus">Pontos de bônus</label>
+              <input id="s-bonus" type="number" min="0" max="1000" step="1" value="0">
+            </div>
+          </div>
+          <p class="hint">Use 0 para desativar. Só contam as enquetes em que a pessoa votou, e um erro zera a sequência. A regra vale para todo o ranking e é recalculada na hora.</p>
+          <p class="error" id="streak-error" role="alert"></p>
+          <button class="btn" type="submit">Salvar bônus</button>
+        </form>
+      </section>
+
       <details class="panel data">
         <summary>Backup dos dados</summary>
-        <p></p>
+        <p>Os dados ficam no Supabase e não se perdem quando o Render reinicia. Se quiser uma cópia extra, baixe tudo em um arquivo JSON.</p>
         <div class="actions">
           <button class="btn ghost" id="backup" type="button">Baixar backup</button>
         </div>

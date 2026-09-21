@@ -58,4 +58,6 @@ Se o redirecionamento do login der erro, defina `PUBLIC_URL=https://SEU-APP.onre
 - **Zerar ranking** (painel admin) volta todos os pontos para 0.
 - Toggle no painel: **Substituir** (a nova enquete tira as anteriores da página principal) ou **Acumular**. Enquetes fora da página seguem no painel e podem ser resolvidas normalmente; dá para ocultar/mostrar cada uma.
 - **Reabrir votação** de uma enquete com resposta pergunta o que fazer com os pontos: *manter* (ficam guardados no ranking e os votos são limpos, como nova rodada) ou *zerar* (os pontos dela saem do ranking e os votos são mantidos).
+- **Perfil do participante:** clique em um nome no ranking (ou no seu nome no topo). Mostra posição, pontos, acertos, aproveitamento, sequência atual e melhor sequência, e o histórico de palpites já resolvidos. Palpites em aberto nunca aparecem.
+- **Bônus de sequência** (painel admin, desligado por padrão): a cada N acertos seguidos a pessoa ganha +B pontos. Só contam enquetes em que ela votou, e um erro zera a sequência. A regra é recalculada em todo o ranking na hora.
 - A página principal atualiza sozinha (sem F5) quando o admin publica uma enquete, encerra ou define a resposta.

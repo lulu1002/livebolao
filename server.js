@@ -266,38 +266,89 @@ function adminPoll(p, votes) {
   };
 }
 
-/* O ranking soma duas fontes:
-   1) enquetes resolvidas que ainda existem (trocar a resposta certa recalcula);
-   2) pontos "guardados" de enquetes que o admin já apagou (tabela awards).
-   "Zerar ranking" limpa as duas. */
-async function computeRanking() {
-  const { rows } = await q(`
-    select u.id, u.display_name, u.login, u.avatar_url,
-           coalesce(sum(case when r.hit then r.points else 0 end), 0)::int as points,
-           (count(*) filter (where r.hit))::int as hits,
-           count(r.user_id)::int as played
-    from users u
-    left join (
-      select v.user_id, p.points, (v.option_id = p.correct_option_id) as hit
-      from votes v join polls p on p.id = v.poll_id
-      where p.correct_option_id is not null and p.counted
-      union all
-      select user_id, points, hit from awards
-    ) r on r.user_id = u.id
-    group by u.id`);
-  const rounds = await q(`
-    select ((select count(*) from polls where correct_option_id is not null and counted)
-          + (select count(distinct poll_id) from awards))::int as n`);
+async function getStreakRule() {
+  const { rows } = await q("select key, value from settings where key in ('streak_every', 'streak_bonus')");
+  const get = (k) => {
+    const r = rows.find((x) => x.key === k);
+    const n = r ? parseInt(r.value, 10) : 0;
+    return Number.isInteger(n) && n > 0 ? n : 0;
+  };
+  const every = get('streak_every');
+  const bonus = get('streak_bonus');
+  return every > 0 && bonus > 0 ? { every, bonus } : { every: 0, bonus: 0 };
+}
 
-  const list = rows.map((r) => ({
-    userId: r.id,
-    name: r.display_name,
-    login: r.login,
-    avatar: r.avatar_url,
-    points: r.points,
-    hits: r.hits,
-    played: r.played,
-  }));
+/* Classificação e histórico de cada participante. Soma duas fontes:
+   1) enquetes resolvidas que ainda existem (trocar a resposta certa recalcula);
+   2) rodadas "guardadas" (tabela awards): enquetes apagadas ou reabertas mantendo os pontos.
+   "Zerar ranking" limpa as duas. Os resultados são lidos em ordem cronológica
+   para calcular a sequência de acertos e o bônus (se ativado). */
+async function computeStandings() {
+  const [users, results, rounds, rule] = await Promise.all([
+    q('select id, display_name, login, avatar_url from users'),
+    q(`
+      select r.user_id, r.poll_title, r.chosen, r.correct, r.points, r.hit, r.at
+      from (
+        select v.user_id, p.title as poll_title, oc.label as chosen, cc.label as correct,
+               p.points, (v.option_id = p.correct_option_id) as hit, p.resolved_at as at
+        from votes v
+        join polls p on p.id = v.poll_id
+        left join poll_options oc on oc.id = v.option_id
+        left join poll_options cc on cc.id = p.correct_option_id
+        where p.correct_option_id is not null and p.counted
+        union all
+        select user_id, poll_title, null, null, points, hit, resolved_at from awards
+      ) r
+      order by r.at nulls first, r.poll_title`),
+    q(`select ((select count(*) from polls where correct_option_id is not null and counted)
+             + (select count(distinct poll_id) from awards))::int as n`),
+    getStreakRule(),
+  ]);
+
+  const stats = new Map(users.rows.map((u) => [u.id, {
+    userId: u.id,
+    name: u.display_name,
+    login: u.login,
+    avatar: u.avatar_url,
+    points: 0,
+    hits: 0,
+    played: 0,
+    streak: 0,
+    bestStreak: 0,
+    bonus: 0,
+    history: [],
+  }]));
+
+  for (const r of results.rows) {
+    const s = stats.get(r.user_id);
+    if (!s) continue;
+    s.played += 1;
+    let bonus = 0;
+    if (r.hit) {
+      s.hits += 1;
+      s.points += r.points;
+      s.streak += 1;
+      s.bestStreak = Math.max(s.bestStreak, s.streak);
+      if (rule.every > 0 && s.streak % rule.every === 0) {
+        bonus = rule.bonus;
+        s.bonus += bonus;
+        s.points += bonus;
+      }
+    } else {
+      s.streak = 0;
+    }
+    s.history.push({
+      title: r.poll_title,
+      chosen: r.chosen,
+      correct: r.correct,
+      hit: r.hit,
+      points: r.hit ? r.points : 0,
+      bonus,
+      at: iso(r.at),
+    });
+  }
+
+  const list = [...stats.values()];
   list.sort((a, b) => b.points - a.points || b.hits - a.hits || a.name.localeCompare(b.name, 'pt-BR'));
   let pos = 0;
   let prev = null;
@@ -306,7 +357,7 @@ async function computeRanking() {
     s.position = pos;
     prev = s;
   });
-  return { ranking: list, resolved: rounds.rows[0].n };
+  return { ranking: list, resolved: rounds.rows[0].n, rule };
 }
 
 function parsePollInput(body, requireOptions) {
@@ -543,7 +594,26 @@ app.post('/api/polls/:id/vote', requireUser, wrap(async (req, res) => {
 }));
 
 app.get('/api/ranking', wrap(async (req, res) => {
-  res.json(await computeRanking());
+  const st = await computeStandings();
+  res.json({
+    ranking: st.ranking.map(({ history, ...row }) => row),
+    resolved: st.resolved,
+    rule: st.rule,
+  });
+}));
+
+/* Perfil público: só mostra enquetes já resolvidas, então não revela palpites em aberto */
+app.get('/api/users/:id/profile', wrap(async (req, res) => {
+  const st = await computeStandings();
+  const found = st.ranking.find((r) => r.userId === req.params.id);
+  if (!found) return res.status(404).json({ error: 'Participante não encontrado.' });
+  const { history, ...stats } = found;
+  res.json({
+    ...stats,
+    accuracy: stats.played ? Math.round((stats.hits / stats.played) * 100) : 0,
+    rule: st.rule,
+    history: history.slice().reverse(), // mais recentes primeiro
+  });
 }));
 
 /* ---------- Admin ---------- */
@@ -575,6 +645,7 @@ app.get('/api/admin/polls', requireAdmin, wrap(async (req, res) => {
     polls: list.map((p) => adminPoll(p, votes.get(p.id) || [])),
     users: users.rows[0].n,
     mode: await getMode(),
+    streak: await getStreakRule(),
   });
 }));
 
@@ -637,8 +708,8 @@ app.post('/api/admin/polls/:id/reopen', requireAdmin, wrap(async (req, res) => {
     if (scoring && choice !== 'keep' && choice !== 'zero') return 'choose';
     if (scoring && choice === 'keep') {
       await c.query(
-        `insert into awards (poll_id, poll_title, user_id, hit, points)
-         select p.id, p.title, v.user_id, (v.option_id = p.correct_option_id), p.points
+        `insert into awards (poll_id, poll_title, user_id, hit, points, resolved_at)
+         select p.id, p.title, v.user_id, (v.option_id = p.correct_option_id), p.points, p.resolved_at
          from polls p join votes v on v.poll_id = p.id
          where p.id = $1`,
         [req.params.id]
@@ -685,8 +756,8 @@ app.delete('/api/admin/polls/:id', requireAdmin, wrap(async (req, res) => {
     if (!exists.rowCount) return false;
     // Se a enquete já tinha resposta, os pontos ficam guardados no ranking.
     await c.query(
-      `insert into awards (poll_id, poll_title, user_id, hit, points)
-       select p.id, p.title, v.user_id, (v.option_id = p.correct_option_id), p.points
+      `insert into awards (poll_id, poll_title, user_id, hit, points, resolved_at)
+       select p.id, p.title, v.user_id, (v.option_id = p.correct_option_id), p.points, p.resolved_at
        from polls p join votes v on v.poll_id = p.id
        where p.id = $1 and p.correct_option_id is not null and p.counted`,
       [req.params.id]
@@ -708,13 +779,33 @@ app.post('/api/admin/ranking/reset', requireAdmin, wrap(async (req, res) => {
 }));
 
 app.post('/api/admin/settings', requireAdmin, wrap(async (req, res) => {
-  const mode = req.body?.mode;
-  if (mode !== 'replace' && mode !== 'accumulate') return res.status(400).json({ error: 'Modo inválido.' });
-  await q(
-    "insert into settings (key, value) values ('mode', $1) on conflict (key) do update set value = excluded.value",
-    [mode]
-  );
-  res.json({ mode });
+  const { mode, streakEvery, streakBonus } = req.body || {};
+  const entries = [];
+  let rankingChanged = false;
+
+  if (mode !== undefined) {
+    if (mode !== 'replace' && mode !== 'accumulate') return res.status(400).json({ error: 'Modo inválido.' });
+    entries.push(['mode', mode]);
+  }
+  if (streakEvery !== undefined || streakBonus !== undefined) {
+    const every = Number(streakEvery);
+    const bonus = Number(streakBonus);
+    if (!Number.isInteger(every) || every < 0 || every > 50 || !Number.isInteger(bonus) || bonus < 0 || bonus > 1000) {
+      return res.status(400).json({ error: 'Bônus inválido: use números inteiros (0 desativa).' });
+    }
+    entries.push(['streak_every', String(every)], ['streak_bonus', String(bonus)]);
+    rankingChanged = true;
+  }
+  if (!entries.length) return res.status(400).json({ error: 'Nada para salvar.' });
+
+  for (const [key, value] of entries) {
+    await q(
+      'insert into settings (key, value) values ($1, $2) on conflict (key) do update set value = excluded.value',
+      [key, value]
+    );
+  }
+  if (rankingChanged) broadcast(); // o ranking mudou para todo mundo
+  res.json({ ok: true });
 }));
 
 /* Cópia dos dados em JSON (os dados já ficam no Supabase; isto é uma segurança extra) */

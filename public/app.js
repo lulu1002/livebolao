@@ -12,6 +12,9 @@
     ranking: null,
     rankError: null,
     view: 'polls',
+    profileId: null,
+    profile: null,
+    profileError: null,
   };
 
   /* ---------- Utilidades ---------- */
@@ -76,11 +79,12 @@
   }
 
   // Foto da Twitch, ou a inicial do nome quando não há foto
-  function avatarEl(name, url) {
+  function avatarEl(name, url, size = '') {
+    const cls = `avatar${size ? ` ${size}` : ''}`;
     if (url) {
-      return h('img', { class: 'avatar', src: url, alt: '', width: '36', height: '36', loading: 'lazy', referrerpolicy: 'no-referrer' });
+      return h('img', { class: cls, src: url, alt: '', width: '36', height: '36', loading: 'lazy', referrerpolicy: 'no-referrer' });
     }
-    return h('span', { class: 'avatar ph', 'aria-hidden': 'true' }, (name || '?').slice(0, 1).toUpperCase());
+    return h('span', { class: `${cls} ph`, 'aria-hidden': 'true' }, (name || '?').slice(0, 1).toUpperCase());
   }
 
   /* ---------- Cabeçalho ---------- */
@@ -90,7 +94,7 @@
     if (state.user) {
       box.append(
         avatarEl(state.user.name, state.user.avatar),
-        h('span', { class: 'me-name' }, state.user.name),
+        h('a', { class: 'me-name', href: `#perfil/${state.user.id}` }, state.user.name),
         h('button', { class: 'btn ghost small', type: 'button', onclick: logout }, 'Sair')
       );
     } else {
@@ -119,7 +123,7 @@
   }
 
   function whenLabel(p) {
-    if (p.status === 'open') return p.closesAt ? `Fecha em ${fmtDate(p.closesAt)}` : 'Fecha quando o admiro encerrar';
+    if (p.status === 'open') return p.closesAt ? `Fecha em ${fmtDate(p.closesAt)}` : 'Fecha quando o admin encerrar';
     if (p.status === 'closed') return 'Aguardando resultado';
     return 'Resultado definido';
   }
@@ -204,7 +208,7 @@
     }
     if (!state.polls.length) {
       box.append(h('div', { class: 'empty' },
-        h('p', {}, 'Ainda não há enquetes. Quando o alto escalao publicar a primeira, ela aparece aqui.')));
+        h('p', {}, 'Ainda não há enquetes. Quando o admin publicar a primeira, ela aparece aqui.')));
       return;
     }
     state.polls.forEach((p) => box.append(renderPoll(p)));
@@ -264,38 +268,128 @@
       return;
     }
     if (!r.resolved) {
-      box.append(h('p', { class: 'note' }, 'Os pontos aparecem quando o admiro definir a primeira resposta certa.'));
+      box.append(h('p', { class: 'note' }, 'Os pontos aparecem quando o admin definir a primeira resposta certa.'));
     }
     box.append(h('ol', { class: 'rank' }, r.ranking.map((s) => {
       const me = state.user && state.user.id === s.userId;
-      const hits = s.played
+      const hits = (s.played
         ? `${s.hits} ${s.hits === 1 ? 'acerto' : 'acertos'} em ${s.played} ${s.played === 1 ? 'enquete' : 'enquetes'}`
-        : 'Sem enquetes resolvidas';
+        : 'Sem enquetes resolvidas') + (s.streak >= 2 ? ` · sequência de ${s.streak}` : '');
       return h('li', { class: me ? 'me' : null },
         h('span', { class: `pos${s.position === 1 && s.points > 0 ? ' first' : ''}` }, s.position),
         avatarEl(s.name, s.avatar),
-        h('span', {}, h('span', { class: 'nm' }, s.name + (me ? ' (você)' : '')), h('span', { class: 'hits' }, hits)),
+        h('span', {}, h('a', { class: 'nm', href: `#perfil/${s.userId}` }, s.name + (me ? ' (você)' : '')), h('span', { class: 'hits' }, hits)),
         h('span', { class: 'score' }, h('b', {}, s.points), ' pts'));
     })));
   }
 
-  /* ---------- Abas ---------- */
-  function setView(view) {
+  /* ---------- Perfil ---------- */
+  async function loadProfile() {
+    const id = state.profileId;
+    try {
+      const data = await api(`/api/users/${encodeURIComponent(id)}/profile`);
+      if (id !== state.profileId) return; // já navegou para outro perfil
+      state.profile = data;
+      state.profileError = null;
+    } catch (e) {
+      state.profile = null;
+      state.profileError = e.message;
+    }
+    renderProfile();
+  }
+
+  function stat(label, value, sub) {
+    return h('div', { class: 'stat' }, h('dt', {}, label), h('dd', {}, h('b', {}, String(value)), sub ? h('small', {}, sub) : null));
+  }
+
+  function historyItem(i) {
+    const detail = i.chosen
+      ? `Palpite: ${i.chosen}${i.correct ? ` · Certa: ${i.correct}` : ''}`
+      : 'Rodada guardada';
+    return h('li', {},
+      h('div', {},
+        h('span', { class: 'nm' }, i.title),
+        h('span', { class: 'hits' }, detail)),
+      h('div', { class: 'hist-res' },
+        h('span', { class: `pill ${i.hit ? 'hit' : 'miss'}` }, i.hit ? `Acertou +${i.points}` : 'Errou'),
+        i.bonus ? h('span', { class: 'pill bonus' }, `+${i.bonus} bônus`) : null));
+  }
+
+  function renderProfile() {
+    const box = $('#profile');
+    box.replaceChildren(
+      h('button', { class: 'btn ghost small', type: 'button', onclick: () => navigate('#ranking') }, 'Voltar ao ranking'));
+    if (state.profileError) {
+      box.append(h('div', { class: 'empty' }, h('p', {}, state.profileError)));
+      return;
+    }
+    const p = state.profile;
+    if (!p) {
+      box.append(h('p', { class: 'note' }, 'Carregando perfil…'));
+      return;
+    }
+    const me = state.user && state.user.id === p.userId;
+    box.append(
+      h('div', { class: 'profile-head' },
+        avatarEl(p.name, p.avatar, 'big'),
+        h('div', {},
+          h('h2', {}, p.name + (me ? ' (você)' : '')),
+          h('a', { class: 'linkish', href: `https://www.twitch.tv/${encodeURIComponent(p.login)}`, target: '_blank', rel: 'noopener noreferrer' }, 'Canal na Twitch'))),
+      h('dl', { class: 'stats' },
+        stat('Posição', `${p.position}º`),
+        stat('Pontos', p.points),
+        stat('Acertos', `${p.hits}/${p.played}`, p.played ? `${p.accuracy}% de aproveitamento` : ''),
+        stat('Sequência', p.streak, `melhor: ${p.bestStreak}`)),
+      p.rule.every > 0
+        ? h('p', { class: 'note' },
+          `Bônus de sequência: +${p.rule.bonus} pontos a cada ${p.rule.every} acertos seguidos.` +
+          (p.bonus ? ` Já rendeu ${p.bonus} pontos.` : ''))
+        : null,
+      h('h3', { class: 'section-title' }, 'Histórico'),
+      p.history.length
+        ? h('ol', { class: 'hist' }, p.history.map(historyItem))
+        : h('div', { class: 'empty' }, h('p', {}, 'Nenhum palpite resolvido ainda.')));
+  }
+
+  /* ---------- Navegação ---------- */
+  function setView(view, profileId) {
     state.view = view;
     $('#view-polls').hidden = view !== 'polls';
     $('#view-ranking').hidden = view !== 'ranking';
+    $('#view-profile').hidden = view !== 'profile';
     $('#tab-polls').setAttribute('aria-selected', String(view === 'polls'));
-    $('#tab-ranking').setAttribute('aria-selected', String(view === 'ranking'));
-    history.replaceState(null, '', view === 'ranking' ? '#ranking' : location.pathname);
+    $('#tab-ranking').setAttribute('aria-selected', String(view !== 'polls'));
     if (view === 'ranking') loadRanking();
+    if (view === 'profile') {
+      state.profileId = profileId;
+      state.profile = null;
+      state.profileError = null;
+      renderProfile();
+      loadProfile();
+      window.scrollTo(0, 0);
+    }
   }
-  $('#tab-polls').addEventListener('click', () => setView('polls'));
-  $('#tab-ranking').addEventListener('click', () => setView('ranking'));
+
+  function route() {
+    const m = location.hash.match(/^#perfil\/([\w-]+)$/);
+    if (m) setView('profile', m[1]);
+    else setView(location.hash === '#ranking' ? 'ranking' : 'polls');
+  }
+
+  function navigate(hash) {
+    history.pushState(null, '', hash || location.pathname);
+    route();
+  }
+
+  window.addEventListener('popstate', route); // botão voltar e links #perfil/...
+  $('#tab-polls').addEventListener('click', () => navigate(''));
+  $('#tab-ranking').addEventListener('click', () => navigate('#ranking'));
 
   /* ---------- Atualização automática ---------- */
   function refresh() {
     loadPolls();
     if (state.view === 'ranking') loadRanking();
+    if (state.view === 'profile') loadProfile();
   }
 
   // O servidor avisa quando o admin publica, encerra ou define uma resposta
@@ -319,7 +413,7 @@
     const result = params.get('login');
     if (!result) return;
     if (result === 'cancelado') toast('Login cancelado.');
-    else toast('Não foi possível entrar com a Twitch. Tente de novo meu mano.', true);
+    else toast('Não foi possível entrar com a Twitch. Tente de novo.', true);
     history.replaceState(null, '', location.pathname + location.hash);
   }
 
@@ -331,7 +425,7 @@
       state.user = me.user;
     } catch (_) { /* segue como visitante */ }
     renderWho();
-    setView(location.hash === '#ranking' ? 'ranking' : 'polls');
+    route();
     loadPolls();
     connectEvents();
     // Plano B caso a conexão em tempo real caia
