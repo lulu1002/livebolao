@@ -35,11 +35,6 @@ h1, h2, h3 {
 button, input, textarea { font: inherit; }
 :focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
 
-button::hover {
-   transform: translate(scale(1.1));
-  background: blue;
-}
-
 .wrap { width: min(100% - 2rem, 52rem); margin-inline: auto; }
 .wrap.wide { width: min(100% - 2rem, 66rem); }
 .main { padding-block: 1.75rem 4rem; }
@@ -116,6 +111,15 @@ button::hover {
 .btn:hover { background: #0B1650; border-color: #0B1650; }
 .btn.ghost { background: transparent; color: var(--ink); }
 .btn.ghost:hover { background: rgba(20, 35, 122, 0.08); border-color: var(--ink); }
+
+#profile > .btn.ghost:first-child {
+  transition: transform 0.15s ease, background-color 0.15s ease;
+}
+#profile > .btn.ghost:first-child:hover {
+  background: var(--ink);
+  color: var(--ticket);
+  transform: scale(1.05);
+}
 .btn.danger { background: transparent; color: var(--miss); border-color: var(--miss); }
 .btn.danger:hover { background: rgba(201, 53, 53, 0.08); border-color: var(--miss); }
 .btn.small { padding: 0.35rem 0.75rem; font-size: 0.9rem; }
