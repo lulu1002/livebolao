@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: bolao-isaroza
+    name: bolao
     runtime: node
     plan: free
     buildCommand: npm install
@@ -12,11 +12,11 @@ services:
       # Senha do painel /admin. O Render gera uma; veja em Environment.
       - key: ADMIN_PASSWORD
         generateValue: true
-      # Connection string do Supabase (session pooler)
+      # Connection string do Supabase (Session pooler). Você informa ao criar o Blueprint.
       - key: DATABASE_URL
-        value: postgresql://postgres.fqeuhtzmsqgbqktgxzlt:luian099887@aws-0-sa-east-1.pooler.supabase.com:5432/postgres
+        sync: false
       # Credenciais do app criado em dev.twitch.tv/console
       - key: TWITCH_CLIENT_ID
-        value: x4qevszaoxnscv462g6913dzo3m71t
+        sync: false
       - key: TWITCH_CLIENT_SECRET
-        value: kfnrl6zh0759zq8f4r579qhtt9x0df
+        sync: false

@@ -1,5 +1,5 @@
 {
-  "name": "bolao-isaroza",
+  "name": "bolao",
   "version": "1.0.0",
   "description": "Bolão de enquetes com ranking, login com Twitch e Supabase",
   "main": "server.js",

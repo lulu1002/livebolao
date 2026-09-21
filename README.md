@@ -57,4 +57,5 @@ Se o redirecionamento do login der erro, defina `PUBLIC_URL=https://SEU-APP.onre
 - Apagar uma enquete já resolvida não tira os pontos do ranking: eles ficam guardados.
 - **Zerar ranking** (painel admin) volta todos os pontos para 0.
 - Toggle no painel: **Substituir** (a nova enquete tira as anteriores da página principal) ou **Acumular**. Enquetes fora da página seguem no painel e podem ser resolvidas normalmente; dá para ocultar/mostrar cada uma.
+- **Reabrir votação** de uma enquete com resposta pergunta o que fazer com os pontos: *manter* (ficam guardados no ranking e os votos são limpos, como nova rodada) ou *zerar* (os pontos dela saem do ranking e os votos são mantidos).
 - A página principal atualiza sozinha (sem F5) quando o admin publica uma enquete, encerra ou define a resposta.

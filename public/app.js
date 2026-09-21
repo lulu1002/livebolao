@@ -119,7 +119,7 @@
   }
 
   function whenLabel(p) {
-    if (p.status === 'open') return p.closesAt ? `Fecha em ${fmtDate(p.closesAt)}` : 'Fecha quando o mano admiro encerrar';
+    if (p.status === 'open') return p.closesAt ? `Fecha em ${fmtDate(p.closesAt)}` : 'Fecha quando o admin encerrar';
     if (p.status === 'closed') return 'Aguardando resultado';
     return 'Resultado definido';
   }
@@ -204,7 +204,7 @@
     }
     if (!state.polls.length) {
       box.append(h('div', { class: 'empty' },
-        h('p', {}, 'Ainda não há enquetes meu nobre Quando o Auto escalao publicar a primeira, ela aparece aqui.')));
+        h('p', {}, 'Ainda não há enquetes. Quando o admin publicar a primeira, ela aparece aqui.')));
       return;
     }
     state.polls.forEach((p) => box.append(renderPoll(p)));
@@ -264,7 +264,7 @@
       return;
     }
     if (!r.resolved) {
-      box.append(h('p', { class: 'note' }, 'Os pontos aparecem quando o alto escalao definir a primeira resposta certa.'));
+      box.append(h('p', { class: 'note' }, 'Os pontos aparecem quando o admin definir a primeira resposta certa.'));
     }
     box.append(h('ol', { class: 'rank' }, r.ranking.map((s) => {
       const me = state.user && state.user.id === s.userId;
@@ -319,7 +319,7 @@
     const result = params.get('login');
     if (!result) return;
     if (result === 'cancelado') toast('Login cancelado.');
-    else toast('Não foi possível entrar com a Twitch mano véi Tente de novo.', true);
+    else toast('Não foi possível entrar com a Twitch. Tente de novo.', true);
     history.replaceState(null, '', location.pathname + location.hash);
   }
 

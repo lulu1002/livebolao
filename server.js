@@ -625,15 +625,40 @@ app.post('/api/admin/polls/:id/close', requireAdmin, wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
+/* Reabrir votação. Se a enquete já tem resposta e soma pontos, o admin escolhe:
+   - "keep": os pontos atuais ficam guardados no ranking e os votos são limpos (nova rodada);
+   - "zero": os pontos desta enquete saem do ranking (inclusive rodadas guardadas antes). */
 app.post('/api/admin/polls/:id/reopen', requireAdmin, wrap(async (req, res) => {
-  const r = await q(
-    `update polls
-     set closed = false, correct_option_id = null, resolved_at = null,
-         closes_at = case when closes_at is not null and closes_at <= now() then null else closes_at end
-     where id = $1`,
-    [req.params.id]
-  );
-  if (!r.rowCount) return notFound(res);
+  const choice = req.body?.points;
+  const result = await tx(async (c) => {
+    const { rows } = await c.query('select correct_option_id, counted from polls where id = $1 for update', [req.params.id]);
+    if (!rows.length) return 'notfound';
+    const scoring = Boolean(rows[0].correct_option_id) && rows[0].counted;
+    if (scoring && choice !== 'keep' && choice !== 'zero') return 'choose';
+    if (scoring && choice === 'keep') {
+      await c.query(
+        `insert into awards (poll_id, poll_title, user_id, hit, points)
+         select p.id, p.title, v.user_id, (v.option_id = p.correct_option_id), p.points
+         from polls p join votes v on v.poll_id = p.id
+         where p.id = $1`,
+        [req.params.id]
+      );
+      await c.query('delete from votes where poll_id = $1', [req.params.id]);
+    }
+    if (scoring && choice === 'zero') {
+      await c.query('delete from awards where poll_id = $1', [req.params.id]);
+    }
+    await c.query(
+      `update polls
+       set closed = false, correct_option_id = null, resolved_at = null,
+           closes_at = case when closes_at is not null and closes_at <= now() then null else closes_at end
+       where id = $1`,
+      [req.params.id]
+    );
+    return 'ok';
+  });
+  if (result === 'notfound') return notFound(res);
+  if (result === 'choose') return res.status(400).json({ error: 'Escolha o que fazer com os pontos desta enquete.' });
   res.json({ ok: true });
 }));
 

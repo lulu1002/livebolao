@@ -193,11 +193,32 @@
     act(() => api(`/api/admin/polls/${p.id}/resolve`, { method: 'POST', body: { optionId: sel.value } }), 'Resposta salva e ranking atualizado');
   }
 
-  function reopen(p) {
-    const warn = p.status === 'resolved' ? ' A resposta certa será removida e os pontos desta enquete saem do ranking.' : '';
-    if (!confirm(`Reabrir a votação de "${p.title}"?${warn}`)) return;
-    act(() => api(`/api/admin/polls/${p.id}/reopen`, { method: 'POST' }), 'Votação reaberta');
+  const reopenDialog = $('#reopen-dialog');
+  let reopenTarget = null;
+
+  function doReopen(p, points) {
+    act(() => api(`/api/admin/polls/${p.id}/reopen`, { method: 'POST', body: points ? { points } : undefined }), 'Votação reaberta');
   }
+
+  function reopen(p) {
+    // Com resposta e pontos valendo no ranking: pergunta o que fazer com os pontos
+    if (p.status === 'resolved' && p.counted) {
+      reopenTarget = p;
+      $('#reopen-name').textContent = p.title;
+      reopenDialog.showModal();
+      return;
+    }
+    if (!confirm(`Reabrir a votação de "${p.title}"?`)) return;
+    doReopen(p);
+  }
+
+  reopenDialog.querySelectorAll('[data-choice]').forEach((b) => b.addEventListener('click', () => {
+    const p = reopenTarget;
+    reopenDialog.close();
+    if (p) doReopen(p, b.dataset.choice);
+  }));
+  $('#reopen-cancel').addEventListener('click', () => reopenDialog.close());
+  reopenDialog.addEventListener('click', (e) => { if (e.target === reopenDialog) reopenDialog.close(); });
 
   function remove(p) {
     const keep = p.status === 'resolved' && p.counted

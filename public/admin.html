@@ -87,13 +87,28 @@
 
       <details class="panel data">
         <summary>Backup dos dados</summary>
-        <p></p>
+        <p>Os dados ficam no Supabase e não se perdem quando o Render reinicia. Se quiser uma cópia extra, baixe tudo em um arquivo JSON.</p>
         <div class="actions">
           <button class="btn ghost" id="backup" type="button">Baixar backup</button>
         </div>
       </details>
     </div>
   </main>
+
+  <dialog id="reopen-dialog" aria-labelledby="reopen-title">
+    <div class="dlg">
+      <h2 id="reopen-title">Reabrir votação</h2>
+      <p class="poll-name" id="reopen-name"></p>
+      <p>Esta enquete já tem resposta e soma pontos no ranking. O que fazer com esses pontos?</p>
+      <div class="choices">
+        <button class="btn" type="button" data-choice="keep">Manter os pontos</button>
+        <p class="hint">Os pontos continuam no ranking e os votos desta enquete são limpos, para valer como uma nova rodada.</p>
+        <button class="btn danger" type="button" data-choice="zero">Zerar os pontos desta enquete</button>
+        <p class="hint">Os pontos dela saem do ranking. Os votos são mantidos e os participantes podem trocá-los.</p>
+      </div>
+      <button class="btn ghost" id="reopen-cancel" type="button">Cancelar</button>
+    </div>
+  </dialog>
 
   <div id="toast" role="status" aria-live="polite"></div>
   <script src="/admin.js"></script>
