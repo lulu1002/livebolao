@@ -56,6 +56,74 @@
     return data;
   }
 
+  /* ---------- Notificações (Web Push) ---------- */
+  function urlBase64ToUint8Array(base64String) {
+    const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const raw = atob(base64);
+    return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)));
+  }
+
+  async function currentSubscription() {
+    if (!('serviceWorker' in navigator)) return null;
+    const reg = await navigator.serviceWorker.ready.catch(() => null);
+    return reg ? reg.pushManager.getSubscription() : null;
+  }
+
+  async function refreshNotifyButton() {
+    const btn = $('#notify-toggle');
+    const sub = await currentSubscription();
+    const on = Boolean(sub) && Notification.permission === 'granted';
+    btn.textContent = on ? '🔔 Notificações ativas' : '🔕 Ativar notificações';
+    btn.classList.toggle('is-on', on);
+  }
+
+  async function toggleNotify() {
+    const btn = $('#notify-toggle');
+    btn.disabled = true;
+    try {
+      const existing = await currentSubscription();
+      if (existing) {
+        await api('/api/push/unsubscribe', { method: 'POST', body: { endpoint: existing.endpoint } }).catch(() => {});
+        await existing.unsubscribe();
+        toast('Notificações desativadas');
+      } else {
+        if (Notification.permission === 'denied') {
+          toast('Notificações bloqueadas no navegador. Ative nas informações do site.', true);
+          return;
+        }
+        const perm = await Notification.requestPermission();
+        if (perm !== 'granted') { toast('Permissão não concedida.'); return; }
+        const { publicKey } = await api('/api/push/public-key');
+        const reg = await navigator.serviceWorker.ready;
+        const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(publicKey) });
+        await api('/api/push/subscribe', { method: 'POST', body: sub.toJSON() });
+        toast('Notificações ativadas. Você vai ser avisado quando abrir uma enquete nova.');
+      }
+    } catch (e) {
+      toast(e.message || 'Não foi possível mudar as notificações.', true);
+    } finally {
+      btn.disabled = false;
+      refreshNotifyButton();
+    }
+  }
+
+  // Mostra o botão só quando o navegador e o servidor suportam. Sem isso,
+  // fica escondido (ex.: Safari no iPhone fora da tela inicial).
+  async function initNotify() {
+    const btn = $('#notify-toggle');
+    if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return;
+    try {
+      await api('/api/push/public-key');
+      await navigator.serviceWorker.register('/sw.js');
+    } catch (_) {
+      return; // servidor sem push configurado, ou o navegador recusou o service worker
+    }
+    btn.hidden = false;
+    btn.addEventListener('click', toggleNotify);
+    refreshNotifyButton();
+  }
+
   function toast(msg, isError = false) {
     const t = $('#toast');
     t.textContent = msg;
@@ -78,9 +146,23 @@
     return svg;
   }
 
+  // Selos do ranking: só os dois mais altos (pontos e sequência), se houver
+  function badgeIcon(b) {
+    if (b.imageUrl) return h('img', { class: 'badge-img', src: b.imageUrl, alt: '', width: '18', height: '18' });
+    return h('span', {}, b.emoji);
+  }
+
+  function badgesEl(badges) {
+    if (!badges) return null;
+    const chips = ['points', 'streak'].map((t) => badges[t]).filter(Boolean)
+      .map((b) => h('span', { class: 'badge', title: b.label }, badgeIcon(b)));
+    return chips.length ? h('span', { class: 'badges' }, chips) : null;
+  }
+
   // Foto da Twitch, ou a inicial do nome quando não há foto
-  function avatarEl(name, url, size = '') {
+  function avatarEl(name, url, size = '', isHouse = false) {
     const cls = `avatar${size ? ` ${size}` : ''}`;
+    if (isHouse) return h('span', { class: `${cls} ph house`, 'aria-hidden': 'true' }, '🏠');
     if (url) {
       return h('img', { class: cls, src: url, alt: '', width: '36', height: '36', loading: 'lazy', referrerpolicy: 'no-referrer' });
     }
@@ -140,6 +222,7 @@
     if (!state.user) return null;
     if (!p.myVote) return h('p', { class: 'note' }, 'Você não votou nesta enquete.');
     if (p.status === 'closed') return h('p', { class: 'note' }, 'Palpite registrado. Aguardando o resultado.');
+    if (p.houseWon) return h('p', { class: 'note miss' }, 'Ninguém acertou: 🏠 a casa levou os pontos desta vez.');
     if (p.myPoints === null) {
       return h('p', { class: p.myHit ? 'note hit' : 'note miss' },
         p.myHit ? 'Você acertou. Os pontos foram zerados junto com o ranking.' : 'Você errou desta vez.');
@@ -186,6 +269,7 @@
           h('span', { class: 'pts-n' }, p.points),
           h('span', { class: 'pts-l' }, p.points === 1 ? 'ponto' : 'pontos')),
         h('span', { class: `pill ${p.status}` }, statusText),
+        p.houseWon ? h('span', { class: 'pill house' }, '🏠 Casa venceu') : null,
         h('div', { class: 'when' }, whenLabel(p))),
       h('div', { class: 'body' },
         h('h2', {}, p.title),
@@ -275,10 +359,14 @@
       const hits = (s.played
         ? `${s.hits} ${s.hits === 1 ? 'acerto' : 'acertos'} em ${s.played} ${s.played === 1 ? 'enquete' : 'enquetes'}`
         : 'Sem enquetes resolvidas') + (s.streak >= 2 ? ` · sequência de ${s.streak}` : '');
-      return h('li', { class: me ? 'me' : null },
+      return h('li', { class: [me && 'me', s.isHouse && 'is-house'].filter(Boolean).join(' ') || null },
         h('span', { class: `pos${s.position === 1 && s.points > 0 ? ' first' : ''}` }, s.position),
-        avatarEl(s.name, s.avatar),
-        h('span', {}, h('a', { class: 'nm', href: `#perfil/${s.userId}` }, s.name + (me ? ' (você)' : '')), h('span', { class: 'hits' }, hits)),
+        avatarEl(s.name, s.avatar, '', s.isHouse),
+        h('span', {},
+          h('span', { class: 'nm-row' },
+            h('a', { class: 'nm', href: `#perfil/${s.userId}` }, (s.isHouse ? '🏠 ' : '') + s.name + (me ? ' (você)' : '')),
+            badgesEl(s.badges)),
+          h('span', { class: 'hits' }, s.isHouse ? 'Conta da casa' : hits)),
         h('span', { class: 'score' }, h('b', {}, s.points), ' pts'));
     })));
   }
@@ -331,10 +419,12 @@
     const me = state.user && state.user.id === p.userId;
     box.append(
       h('div', { class: 'profile-head' },
-        avatarEl(p.name, p.avatar, 'big'),
+        avatarEl(p.name, p.avatar, 'big', p.isHouse),
         h('div', {},
-          h('h2', {}, p.name + (me ? ' (você)' : '')),
-          h('a', { class: 'linkish', href: `https://www.twitch.tv/${encodeURIComponent(p.login)}`, target: '_blank', rel: 'noopener noreferrer' }, 'Canal na Twitch'))),
+          h('h2', {}, (p.isHouse ? '🏠 ' : '') + p.name + (me ? ' (você)' : '')),
+          p.isHouse
+            ? h('span', { class: 'hits' }, 'Conta da casa — entra quando nenhuma opção bate')
+            : h('a', { class: 'linkish', href: `https://www.twitch.tv/${encodeURIComponent(p.login)}`, target: '_blank', rel: 'noopener noreferrer' }, 'Canal na Twitch'))),
       h('dl', { class: 'stats' },
         stat('Posição', `${p.position}º`),
         stat('Pontos', p.points),
@@ -345,6 +435,24 @@
         `Bônus de sequência: +${p.rule.bonus} pontos a cada ${p.rule.every} acertos seguidos.` +
         (p.bonus ? ` Já rendeu ${p.bonus} pontos.` : '')));
     }
+
+    box.append(h('h3', { class: 'section-title' }, 'Conquistas'));
+    if (p.achievements.length) {
+      box.append(h('ul', { class: 'achs' }, p.achievements.map((a) => h('li', { class: 'ach' },
+        a.imageUrl
+          ? h('img', { class: 'ach-icon img', src: a.imageUrl, alt: '' })
+          : h('span', { class: 'ach-icon' }, a.emoji),
+        h('span', {},
+          h('span', { class: 'nm' }, a.label),
+          h('span', { class: 'hits' }, new Date(a.unlockedAt).toLocaleDateString('pt-BR')))))));
+    } else {
+      box.append(h('p', { class: 'note' }, 'Nenhuma conquista ainda.'));
+    }
+    [p.nextPoints, p.nextStreak].filter(Boolean).forEach((n) => {
+      const what = n === p.nextPoints ? 'pontos' : 'de sequência';
+      box.append(h('p', { class: 'note' }, `Faltam ${n.remaining} ${what} para ${n.emoji} ${n.label}.`));
+    });
+
     box.append(
       h('h3', { class: 'section-title' }, 'Histórico'),
       p.history.length
@@ -420,6 +528,7 @@
 
   async function init() {
     renderWho();
+    initNotify();
     showLoginResult();
     try {
       const me = await api('/api/me');

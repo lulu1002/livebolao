@@ -27,7 +27,15 @@ Projetos gratuitos do Supabase são pausados após uma semana sem atividade; usa
 
 O login não pede nenhuma permissão extra: só identifica a conta.
 
-## 3. Rodar local (ou no Termux)
+## 3. Notificações (opcional)
+
+Avisa quem ativou o sino quando uma enquete nova é publicada, mesmo com o navegador fechado (Android) ou em segundo plano (desktop). No iPhone, o Safari só recebe push se o site for adicionado à tela inicial (iOS 16.4+).
+
+1. Gere um par de chaves: `npx web-push generate-vapid-keys`.
+2. Defina `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` e `VAPID_SUBJECT` (um `mailto:` seu).
+3. Sem essas variáveis, o site funciona normal e o botão de notificação simplesmente não aparece.
+
+## 4. Rodar local (ou no Termux)
 
 ```bash
 npm install
@@ -38,7 +46,7 @@ ADMIN_PASSWORD=minhasenha npm start
 
 Abra http://localhost:3000.
 
-## 4. Deploy no Render
+## 5. Deploy no Render
 
 1. Suba a pasta para um repositório no GitHub.
 2. No Render: **New > Blueprint** e escolha o repositório (usa o `render.yaml`). Ele pede `DATABASE_URL`, `TWITCH_CLIENT_ID` e `TWITCH_CLIENT_SECRET`.
@@ -56,8 +64,11 @@ Se o redirecionamento do login der erro, defina `PUBLIC_URL=https://SEU-APP.onre
 - Empate em pontos e acertos divide a mesma posição.
 - Apagar uma enquete já resolvida não tira os pontos do ranking: eles ficam guardados.
 - **Zerar ranking** (painel admin) volta todos os pontos para 0.
+- **Contas da casa:** no painel admin, crie contas fictícias (ex.: "A Casa"). Ao resolver uma enquete, use **🏠 A casa ganha** quando nenhuma opção bater — os pontos dela vão pra essas contas no ranking, e quem votou nas opções normais não pontua naquela rodada. As contas da casa aparecem no ranking e no perfil como qualquer participante (inclusive ganham conquistas), com um selo 🏠 pra ficar claro que não são pessoas reais.
 - Toggle no painel: **Substituir** (a nova enquete tira as anteriores da página principal) ou **Acumular**. Enquetes fora da página seguem no painel e podem ser resolvidas normalmente; dá para ocultar/mostrar cada uma.
 - **Reabrir votação** de uma enquete com resposta pergunta o que fazer com os pontos: *manter* (ficam guardados no ranking e os votos são limpos, como nova rodada) ou *zerar* (os pontos dela saem do ranking e os votos são mantidos).
 - **Perfil do participante:** clique em um nome no ranking (ou no seu nome no topo). Mostra posição, pontos, acertos, aproveitamento, sequência atual e melhor sequência, e o histórico de palpites já resolvidos. Palpites em aberto nunca aparecem.
 - **Bônus de sequência** (painel admin, desligado por padrão): a cada N acertos seguidos a pessoa ganha +B pontos. Só contam enquetes em que ela votou, e um erro zera a sequência. A regra é recalculada em todo o ranking na hora.
+- **Conquistas:** níveis de emblema por total de pontos ou por sequência de acertos seguidos, com nome, emoji e imagem (link https, opcional — sem imagem, usa o emoji) totalmente editáveis no painel `/admin`, seção "Conquistas". Uma vez desbloqueado, o emblema fica para sempre no perfil, mesmo depois de zerar o ranking — editar um nível atualiza como ele aparece em quem já tem; apagar um nível remove o emblema de quem tinha. Vem com sete níveis padrão na primeira vez que o servidor sobe (Bronze/Prata/Ouro/Platina por pontos, três por sequência), que você pode editar, apagar ou complementar à vontade depois. Os dois mais altos aparecem ao lado do nome no ranking.
+- **Notificações:** botão de sino no topo. Avisa todo mundo inscrito quando uma enquete é publicada (não avisa em edição, encerramento ou resultado). As inscrições mortas são limpas sozinhas na próxima tentativa de envio.
 - A página principal atualiza sozinha (sem F5) quando o admin publica uma enquete, encerra ou define a resposta.

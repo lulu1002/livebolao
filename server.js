@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { Pool } = require('pg');
+const webpush = require('web-push');
 
 /* ------------------------------------------------------------------ */
 /* Configuração                                                        */
@@ -30,6 +31,19 @@ if (!DATABASE_URL) {
 }
 if (!TWITCH_CLIENT_ID || !TWITCH_CLIENT_SECRET) {
   console.warn('[aviso] TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET não definidos: o login com a Twitch não vai funcionar.');
+}
+
+// Notificações push: opcionais. Sem as chaves VAPID, o site funciona normal,
+// só não oferece o botão de notificação. Gere as chaves com:
+//   npx web-push generate-vapid-keys
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || '';
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || '';
+const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:admin@example.com';
+const PUSH_ENABLED = Boolean(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY);
+if (PUSH_ENABLED) {
+  webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+} else {
+  console.warn('[aviso] VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY não definidos: notificações push desativadas.');
 }
 
 /* ------------------------------------------------------------------ */
@@ -178,12 +192,16 @@ async function fetchPolls(where = '', params = []) {
   if (!polls.length) return polls;
   const byId = new Map(polls.map((p) => [p.id, p]));
   const opts = await q(
-    'select id, poll_id, label from poll_options where poll_id = any($1::text[]) order by poll_id, position',
+    'select id, poll_id, label, is_house from poll_options where poll_id = any($1::text[]) order by poll_id, position',
     [polls.map((p) => p.id)]
   );
-  for (const o of opts.rows) byId.get(o.poll_id).options.push({ id: o.id, text: o.label });
+  for (const o of opts.rows) byId.get(o.poll_id).options.push({ id: o.id, text: o.label, isHouse: o.is_house });
   return polls;
 }
+
+// A opção "🏠 Casa" existe só pra registrar o voto das contas da casa; nunca aparece pra ninguém escolher.
+const visibleOptions = (p) => p.options.filter((o) => !o.isHouse);
+const houseWon = (p) => p.options.some((o) => o.isHouse && o.id === p.correctOptionId);
 
 async function fetchVotes(pollIds) {
   if (!pollIds.length) return new Map();
@@ -227,13 +245,14 @@ function publicPoll(p, votes, userId) {
     status,
     createdAt: p.createdAt,
     totalVotes: votes.length,
-    options: p.options.map((o) => ({
+    options: visibleOptions(p).map((o) => ({
       id: o.id,
       text: o.text,
       votes: showResults ? votes.filter((v) => v.option_id === o.id).length : null,
     })),
     myVote: mine ? mine.option_id : null,
-    correctOptionId: status === 'resolved' ? p.correctOptionId : null,
+    houseWon: status === 'resolved' && houseWon(p),
+    correctOptionId: status === 'resolved' && !houseWon(p) ? p.correctOptionId : null,
     myHit: status === 'resolved' && mine ? mine.option_id === p.correctOptionId : null,
     myPoints:
       status === 'resolved' && mine && p.counted
@@ -257,8 +276,9 @@ function adminPoll(p, votes) {
     counted: p.counted,
     correctOptionId: p.correctOptionId,
     totalVotes: votes.length,
+    houseWon: houseWon(p),
     hits: p.correctOptionId ? votes.filter((v) => v.option_id === p.correctOptionId).length : null,
-    options: p.options.map((o) => ({
+    options: visibleOptions(p).map((o) => ({
       id: o.id,
       text: o.text,
       voters: votes.filter((v) => v.option_id === o.id).map((v) => v.display_name),
@@ -278,14 +298,64 @@ async function getStreakRule() {
   return every > 0 && bonus > 0 ? { every, bonus } : { every: 0, bonus: 0 };
 }
 
+/* Emblemas: os níveis (nome, imagem, emoji, tipo e meta) são configuráveis pelo
+   admin em /admin e ficam em achievement_defs. Uma vez que alguém desbloqueia um
+   nível, o registro em "achievements" fica pra sempre — mesmo que o ranking seja
+   zerado depois. Editar um nível existente atualiza como ele aparece pra quem já
+   tem o emblema; apagar um nível remove o emblema de quem tinha (cascade). */
+async function fetchAchievementDefs() {
+  const { rows } = await q('select id, type, threshold, label, emoji, image_url from achievement_defs order by type, threshold');
+  return rows.map((r) => ({ id: r.id, type: r.type, threshold: r.threshold, label: r.label, emoji: r.emoji, imageUrl: r.image_url }));
+}
+const nextTier = (defsOfType, current) => {
+  const next = defsOfType.find((t) => t.threshold > current);
+  return next
+    ? { id: next.id, label: next.label, emoji: next.emoji, imageUrl: next.imageUrl, threshold: next.threshold, remaining: next.threshold - current }
+    : null;
+};
+
+/* Desbloqueia (grava no banco, sem duplicar) qualquer nível já alcançado e devolve,
+   por usuário, a lista completa de emblemas conquistados até hoje. */
+async function syncAchievements(list, defs) {
+  const pointDefs = defs.filter((d) => d.type === 'points');
+  const streakDefs = defs.filter((d) => d.type === 'streak');
+  const userIds = [];
+  const defIds = [];
+  for (const s of list) {
+    for (const t of pointDefs) if (s.points >= t.threshold) { userIds.push(s.userId); defIds.push(t.id); }
+    for (const t of streakDefs) if (s.bestStreak >= t.threshold) { userIds.push(s.userId); defIds.push(t.id); }
+  }
+  if (userIds.length) {
+    await q(
+      `insert into achievements (user_id, code)
+       select * from unnest($1::text[], $2::text[])
+       on conflict (user_id, code) do nothing`,
+      [userIds, defIds]
+    );
+  }
+  const ids = list.map((s) => s.userId);
+  if (!ids.length) return new Map();
+  const defById = new Map(defs.map((d) => [d.id, d]));
+  const { rows } = await q('select user_id, code, unlocked_at from achievements where user_id = any($1::text[])', [ids]);
+  const byUser = new Map();
+  for (const r of rows) {
+    const meta = defById.get(r.code);
+    if (!meta) continue; // o nível foi apagado depois de desbloqueado
+    if (!byUser.has(r.user_id)) byUser.set(r.user_id, []);
+    byUser.get(r.user_id).push({ ...meta, unlockedAt: iso(r.unlocked_at) });
+  }
+  for (const arr of byUser.values()) arr.sort((a, b) => a.threshold - b.threshold);
+  return byUser;
+}
+
 /* Classificação e histórico de cada participante. Soma duas fontes:
    1) enquetes resolvidas que ainda existem (trocar a resposta certa recalcula);
    2) rodadas "guardadas" (tabela awards): enquetes apagadas ou reabertas mantendo os pontos.
    "Zerar ranking" limpa as duas. Os resultados são lidos em ordem cronológica
    para calcular a sequência de acertos e o bônus (se ativado). */
 async function computeStandings() {
-  const [users, results, rounds, rule] = await Promise.all([
-    q('select id, display_name, login, avatar_url from users'),
+  const [users, results, rounds, rule, achDefs] = await Promise.all([
+    q('select id, display_name, login, avatar_url, is_house from users'),
     q(`
       select r.user_id, r.poll_title, r.chosen, r.correct, r.points, r.hit, r.at
       from (
@@ -303,6 +373,7 @@ async function computeStandings() {
     q(`select ((select count(*) from polls where correct_option_id is not null and counted)
              + (select count(distinct poll_id) from awards))::int as n`),
     getStreakRule(),
+    fetchAchievementDefs(),
   ]);
 
   const stats = new Map(users.rows.map((u) => [u.id, {
@@ -310,6 +381,7 @@ async function computeStandings() {
     name: u.display_name,
     login: u.login,
     avatar: u.avatar_url,
+    isHouse: u.is_house,
     points: 0,
     hits: 0,
     played: 0,
@@ -357,7 +429,25 @@ async function computeStandings() {
     s.position = pos;
     prev = s;
   });
-  return { ranking: list, resolved: rounds.rows[0].n, rule };
+
+  const achByUser = await syncAchievements(list, achDefs);
+  for (const s of list) {
+    const achs = achByUser.get(s.userId) || [];
+    s.achievements = achs;
+    const topOf = (type) => {
+      const of = achs.filter((a) => a.type === type);
+      return of.length ? of[of.length - 1] : null; // já vem ordenado do menor pro maior nível
+    };
+    s.badges = { points: topOf('points'), streak: topOf('streak') };
+  }
+
+  return {
+    ranking: list,
+    resolved: rounds.rows[0].n,
+    rule,
+    pointTiers: achDefs.filter((d) => d.type === 'points'),
+    streakTiers: achDefs.filter((d) => d.type === 'streak'),
+  };
 }
 
 function parsePollInput(body, requireOptions) {
@@ -404,7 +494,8 @@ app.use((req, res, next) => {
   res.setHeader(
     'Content-Security-Policy',
     "default-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; " +
-      "img-src 'self' data: https://static-cdn.jtvnw.net; script-src 'self'; frame-ancestors 'none'"
+      // img-src aceita qualquer https: porque o admin escolhe o link da imagem de cada conquista
+      "img-src 'self' data: https:; script-src 'self'; frame-ancestors 'none'"
   );
   next();
 });
@@ -450,6 +541,26 @@ app.use('/api/admin', (req, res, next) => {
   }
   next();
 });
+
+/* Avisa quem se inscreveu quando uma enquete nova é publicada. Inscrições
+   mortas (o navegador não existe mais) são removidas na hora. */
+async function notifyNewPoll(title) {
+  if (!PUSH_ENABLED) return;
+  const { rows } = await q('select endpoint, p256dh, auth from push_subscriptions');
+  if (!rows.length) return;
+  const payload = JSON.stringify({ title: 'Nova enquete no Bolão', body: title, url: '/' });
+  await Promise.all(rows.map(async (r) => {
+    try {
+      await webpush.sendNotification({ endpoint: r.endpoint, keys: { p256dh: r.p256dh, auth: r.auth } }, payload);
+    } catch (e) {
+      if (e.statusCode === 404 || e.statusCode === 410) {
+        await q('delete from push_subscriptions where endpoint = $1', [r.endpoint]).catch(() => {});
+      } else {
+        console.error('Notificação push falhou:', e.message);
+      }
+    }
+  }));
+}
 
 const requireUser = wrap(async (req, res, next) => {
   const u = await currentUser(req);
@@ -558,6 +669,38 @@ app.get('/api/me', wrap(async (req, res) => {
   res.json({ user: u ? userView(u) : null });
 }));
 
+/* ---------- Notificações (Web Push) ---------- */
+app.get('/api/push/public-key', (req, res) => {
+  if (!PUSH_ENABLED) return res.status(503).json({ error: 'Notificações push não estão configuradas neste servidor.' });
+  res.json({ publicKey: VAPID_PUBLIC_KEY });
+});
+
+function validSubscription(b) {
+  return (
+    b && typeof b.endpoint === 'string' && b.endpoint.startsWith('https://') && b.endpoint.length < 500 &&
+    b.keys && typeof b.keys.p256dh === 'string' && typeof b.keys.auth === 'string' &&
+    b.keys.p256dh.length < 200 && b.keys.auth.length < 200
+  );
+}
+
+app.post('/api/push/subscribe', limit('push', 30, 60 * 60 * 1000), wrap(async (req, res) => {
+  if (!PUSH_ENABLED) return res.status(503).json({ error: 'Notificações push não estão configuradas neste servidor.' });
+  if (!validSubscription(req.body)) return res.status(400).json({ error: 'Inscrição inválida.' });
+  const { endpoint, keys } = req.body;
+  await q(
+    `insert into push_subscriptions (endpoint, p256dh, auth) values ($1, $2, $3)
+     on conflict (endpoint) do update set p256dh = excluded.p256dh, auth = excluded.auth`,
+    [endpoint, keys.p256dh, keys.auth]
+  );
+  res.status(201).json({ ok: true });
+}));
+
+app.post('/api/push/unsubscribe', wrap(async (req, res) => {
+  const endpoint = String(req.body?.endpoint ?? '');
+  if (endpoint) await q('delete from push_subscriptions where endpoint = $1', [endpoint]);
+  res.json({ ok: true });
+}));
+
 /* ---------- Enquetes e votos ---------- */
 app.get('/api/polls', wrap(async (req, res) => {
   const u = await currentUser(req);
@@ -612,6 +755,8 @@ app.get('/api/users/:id/profile', wrap(async (req, res) => {
     ...stats,
     accuracy: stats.played ? Math.round((stats.hits / stats.played) * 100) : 0,
     rule: st.rule,
+    nextPoints: nextTier(st.pointTiers, stats.points),
+    nextStreak: nextTier(st.streakTiers, stats.bestStreak),
     history: history.slice().reverse(), // mais recentes primeiro
   });
 }));
@@ -671,6 +816,7 @@ app.post('/api/admin/polls', requireAdmin, wrap(async (req, res) => {
       await c.query('insert into poll_options (id, poll_id, label, position) values ($1, $2, $3, $4)', [o.id, id, o.text, i]);
     }
   });
+  notifyNewPoll(input.title).catch((e) => console.error('Notificação push falhou:', e.message));
   res.status(201).json({ id });
 }));
 
@@ -734,13 +880,86 @@ app.post('/api/admin/polls/:id/reopen', requireAdmin, wrap(async (req, res) => {
 }));
 
 app.post('/api/admin/polls/:id/resolve', requireAdmin, wrap(async (req, res) => {
-  const optionId = String(req.body?.optionId ?? '');
-  const { rowCount: valid } = await q('select 1 from poll_options where id = $1 and poll_id = $2', [optionId, req.params.id]);
-  if (!valid) return res.status(400).json({ error: 'Opção inválida.' });
-  await q(
+  let optionId;
+
+  if (req.body?.house === true) {
+    // "A casa ganha": ninguém acertou. Cria (se ainda não existir) uma opção
+    // oculta pra essa enquete e "vota" nela por todas as contas da casa.
+    const { rows: house } = await q('select id from users where is_house limit 500');
+    if (!house.length) {
+      return res.status(400).json({ error: 'Cadastre pelo menos uma conta da casa antes de usar essa opção.' });
+    }
+    optionId = await tx(async (c) => {
+      const existing = await c.query('select id from poll_options where poll_id = $1 and is_house limit 1', [req.params.id]);
+      if (existing.rowCount) return existing.rows[0].id;
+      const { rowCount } = await c.query('select 1 from polls where id = $1', [req.params.id]);
+      if (!rowCount) return null;
+      const pos = await c.query('select coalesce(max(position), -1) + 1 as n from poll_options where poll_id = $1', [req.params.id]);
+      const id = uid();
+      await c.query('insert into poll_options (id, poll_id, label, position, is_house) values ($1, $2, $3, $4, true)', [
+        id, req.params.id, 'Casa', pos.rows[0].n,
+      ]);
+      return id;
+    });
+    if (!optionId) return notFound(res);
+    for (const h of house) {
+      await q(
+        `insert into votes (poll_id, user_id, option_id) values ($1, $2, $3)
+         on conflict (poll_id, user_id) do update set option_id = excluded.option_id, voted_at = now()`,
+        [req.params.id, h.id, optionId]
+      );
+    }
+  } else {
+    optionId = String(req.body?.optionId ?? '');
+    const { rowCount: valid } = await q(
+      'select 1 from poll_options where id = $1 and poll_id = $2 and not is_house',
+      [optionId, req.params.id]
+    );
+    if (!valid) return res.status(400).json({ error: 'Opção inválida.' });
+  }
+
+  const r = await q(
     'update polls set correct_option_id = $2, counted = true, closed = true, resolved_at = now() where id = $1',
     [req.params.id, optionId]
   );
+  if (!r.rowCount) return notFound(res);
+  await computeStandings(); // grava na hora os emblemas desbloqueados com este resultado
+  res.json({ ok: true });
+}));
+
+/* ---------- Contas da casa (fictícias) ---------- */
+const HOUSE_NAME_RE = /^.{2,40}$/u;
+
+app.get('/api/admin/house-accounts', requireAdmin, wrap(async (req, res) => {
+  const { rows } = await q(
+    'select id, display_name, created_at from users where is_house order by created_at'
+  );
+  res.json({ accounts: rows.map((r) => ({ id: r.id, name: r.display_name, createdAt: iso(r.created_at) })) });
+}));
+
+app.post('/api/admin/house-accounts', requireAdmin, wrap(async (req, res) => {
+  const name = String(req.body?.name ?? '').trim().replace(/\s+/g, ' ');
+  if (!HOUSE_NAME_RE.test(name)) return res.status(400).json({ error: 'O nome precisa ter de 2 a 40 caracteres.' });
+  const id = uid();
+  await q(
+    `insert into users (id, twitch_id, login, display_name, is_house)
+     values ($1, $2, $3, $4, true)`,
+    [id, `house:${id}`, `casa-${id.slice(0, 8)}`, name]
+  );
+  res.status(201).json({ id, name });
+}));
+
+app.put('/api/admin/house-accounts/:id', requireAdmin, wrap(async (req, res) => {
+  const name = String(req.body?.name ?? '').trim().replace(/\s+/g, ' ');
+  if (!HOUSE_NAME_RE.test(name)) return res.status(400).json({ error: 'O nome precisa ter de 2 a 40 caracteres.' });
+  const r = await q('update users set display_name = $2 where id = $1 and is_house', [req.params.id, name]);
+  if (!r.rowCount) return res.status(404).json({ error: 'Conta da casa não encontrada.' });
+  res.json({ ok: true });
+}));
+
+app.delete('/api/admin/house-accounts/:id', requireAdmin, wrap(async (req, res) => {
+  const r = await q('delete from users where id = $1 and is_house', [req.params.id]);
+  if (!r.rowCount) return res.status(404).json({ error: 'Conta da casa não encontrada.' });
   res.json({ ok: true });
 }));
 
@@ -805,6 +1024,62 @@ app.post('/api/admin/settings', requireAdmin, wrap(async (req, res) => {
     );
   }
   if (rankingChanged) broadcast(); // o ranking mudou para todo mundo
+  res.json({ ok: true });
+}));
+
+/* ---------- Níveis de conquista (configuráveis pelo admin) ---------- */
+app.get('/api/admin/achievements', requireAdmin, wrap(async (req, res) => {
+  res.json({ achievements: await fetchAchievementDefs() });
+}));
+
+function parseAchievementInput(body) {
+  const type = body?.type;
+  if (type !== 'points' && type !== 'streak') return { error: 'Tipo inválido: use pontos ou sequência.' };
+  const threshold = Number(body?.threshold);
+  if (!Number.isInteger(threshold) || threshold < 1 || threshold > 100000) {
+    return { error: 'A meta precisa ser um número inteiro maior que 0.' };
+  }
+  const label = String(body?.label ?? '').trim();
+  if (label.length < 2 || label.length > 40) return { error: 'O nome precisa ter de 2 a 40 caracteres.' };
+  let emoji = String(body?.emoji ?? '').trim();
+  if (emoji.length > 8) return { error: 'Emoji inválido.' };
+  if (!emoji) emoji = '🏆';
+  let imageUrl = String(body?.imageUrl ?? '').trim();
+  if (imageUrl && (!imageUrl.startsWith('https://') || imageUrl.length > 500)) {
+    return { error: 'A imagem precisa ser um link https:// válido.' };
+  }
+  return { type, threshold, label, emoji, imageUrl: imageUrl || null };
+}
+
+app.post('/api/admin/achievements', requireAdmin, wrap(async (req, res) => {
+  const input = parseAchievementInput(req.body);
+  if (input.error) return res.status(400).json({ error: input.error });
+  const id = uid();
+  await q(
+    'insert into achievement_defs (id, type, threshold, label, emoji, image_url) values ($1, $2, $3, $4, $5, $6)',
+    [id, input.type, input.threshold, input.label, input.emoji, input.imageUrl]
+  );
+  broadcast();
+  res.status(201).json({ id });
+}));
+
+app.put('/api/admin/achievements/:id', requireAdmin, wrap(async (req, res) => {
+  const input = parseAchievementInput(req.body);
+  if (input.error) return res.status(400).json({ error: input.error });
+  const r = await q(
+    'update achievement_defs set type = $2, threshold = $3, label = $4, emoji = $5, image_url = $6 where id = $1',
+    [req.params.id, input.type, input.threshold, input.label, input.emoji, input.imageUrl]
+  );
+  if (!r.rowCount) return res.status(404).json({ error: 'Nível não encontrado.' });
+  broadcast();
+  res.json({ ok: true });
+}));
+
+app.delete('/api/admin/achievements/:id', requireAdmin, wrap(async (req, res) => {
+  const r = await q('delete from achievement_defs where id = $1', [req.params.id]);
+  if (!r.rowCount) return res.status(404).json({ error: 'Nível não encontrado.' });
+  await q('delete from achievements where code = $1', [req.params.id]); // some com quem já tinha esse emblema
+  broadcast();
   res.json({ ok: true });
 }));
 

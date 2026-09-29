@@ -75,7 +75,10 @@ button, input, textarea { font: inherit; }
 }
 .tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); }
 .tabs button:hover { background: var(--ink); color: var(--ticket); transform: scale(1.05); }
-.who { grid-area: who; display: flex; align-items: center; gap: 0.6rem; padding-bottom: 0.6rem; }
+.head-actions { grid-area: who; display: flex; align-items: center; gap: 0.5rem; padding-bottom: 0.6rem; }
+.who { display: flex; align-items: center; gap: 0.6rem; }
+.btn.is-on { background: var(--hit); border-color: var(--hit); color: #fff; }
+.btn.is-on:hover { background: #0A7444; border-color: #0A7444; }
 .me-name {
   padding: 0.25rem 0.6rem;
   border-radius: 999px;
@@ -98,6 +101,7 @@ button, input, textarea { font: inherit; }
   object-fit: cover;
 }
 .avatar.ph { display: grid; place-items: center; font-weight: 800; }
+.avatar.ph.house { background: var(--gold); font-size: 1.05rem; }
 .avatar.big { width: 4.5rem; height: 4.5rem; font-size: 1.8rem; }
 .who .avatar { width: 1.85rem; height: 1.85rem; }
 
@@ -202,6 +206,7 @@ input:disabled, textarea:disabled { background: rgba(255, 255, 255, 0.5); color:
 }
 .pill.open { background: var(--ink); color: var(--ticket); }
 .pill.resolved { background: var(--gold); }
+.pill.house { background: var(--gold); border-color: var(--ink); }
 .pill.hit { background: var(--hit); border-color: var(--hit); color: #fff; }
 .pill.miss { background: var(--miss); border-color: var(--miss); color: #fff; }
 .pill.bonus { background: var(--gold); }
@@ -311,6 +316,7 @@ input:disabled, textarea:disabled { background: rgba(255, 255, 255, 0.5); color:
 }
 .rank li:first-child { border-top: 0; }
 .rank li.me { background: #EDF0FF; }
+.rank li.is-house { background: #FFF8E6; }
 .pos {
   font-stretch: 62%;
   font-weight: 900;
@@ -322,6 +328,11 @@ input:disabled, textarea:disabled { background: rgba(255, 255, 255, 0.5); color:
 .nm { display: block; font-weight: 700; overflow-wrap: anywhere; }
 a.nm { color: inherit; text-decoration: none; }
 a.nm:hover { text-decoration: underline; }
+.nm-row { display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; }
+.nm-row .nm { display: inline; }
+.badges { display: inline-flex; gap: 0.15rem; line-height: 1; }
+.badge { font-size: 1.05rem; }
+.badge-img { width: 18px; height: 18px; border-radius: 3px; object-fit: cover; vertical-align: middle; }
 .hits { display: block; font-size: 0.875rem; color: var(--ink-soft); }
 .score { white-space: nowrap; }
 .score b { font-stretch: 62%; font-weight: 900; font-size: 1.9rem; line-height: 1; }
@@ -386,6 +397,27 @@ dialog::backdrop { background: rgba(20, 35, 122, 0.55); }
   .stat:nth-child(3) { border-left: 0; }
   .stat:nth-child(n + 3) { border-top: 2px dashed var(--ink); }
 }
+
+/* ---------- Conquistas ---------- */
+.achs {
+  margin: 0.75rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.6rem;
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+}
+.ach {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0.75rem;
+  border: 2px solid var(--ink);
+  border-radius: 4px;
+  background: var(--ticket);
+}
+.ach-icon { flex: none; font-size: 1.6rem; line-height: 1; }
+.ach-icon.img { width: 2rem; height: 2rem; border-radius: 4px; object-fit: cover; }
 
 /* ---------- Aviso rápido ---------- */
 #toast {
@@ -466,6 +498,22 @@ dialog::backdrop { background: rgba(20, 35, 122, 0.55); }
 .aopt input { width: auto; accent-color: var(--ink); }
 .aopt .count { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--ink-soft); white-space: nowrap; }
 .result { margin: 0.9rem 0 0; font-weight: 700; color: var(--hit); }
+.result.house { color: var(--gold-ink, #8a6300); }
+.house-list { display: grid; gap: 0.5rem; margin-top: 1rem; }
+.house-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0; border-top: 1.5px dashed rgba(20, 35, 122, 0.3); }
+.house-row .nm { flex: 1; font-weight: 700; overflow-wrap: anywhere; }
+.ach-admin-list { display: grid; gap: 0.5rem; margin-top: 1rem; }
+.ach-thumb {
+  flex: none;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 4px;
+  object-fit: cover;
+  display: grid;
+  place-items: center;
+  font-size: 1.1rem;
+}
+.ach-thumb.ph { background: var(--paper); border: 1.5px solid var(--ink); }
 .voters { margin-top: 0.9rem; font-size: 0.95rem; }
 .voters summary { cursor: pointer; font-weight: 700; }
 .voters p { margin: 0.4rem 0 0; }

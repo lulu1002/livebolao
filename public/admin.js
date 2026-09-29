@@ -2,7 +2,7 @@
   'use strict';
 
   const $ = (sel, root = document) => root.querySelector(sel);
-  const state = { polls: [], users: 0, editing: null, mode: 'replace', streak: { every: 0, bonus: 0 } };
+  const state = { polls: [], users: 0, editing: null, mode: 'replace', streak: { every: 0, bonus: 0 }, house: [], achievements: [], achEditing: null };
 
   /* ---------- Utilidades ---------- */
   function h(tag, attrs = {}, ...children) {
@@ -112,6 +112,8 @@
       renderMode();
       renderStreak();
       renderList();
+      loadHouse();
+      loadAchievements();
     } catch (e) {
       handleError(e);
     }
@@ -153,16 +155,19 @@
           h('span', { class: `pill ${p.status}` }, statusText(p)))),
       h('p', { class: 'meta' }, meta),
       p.description ? h('p', { class: 'desc' }, p.description) : null,
-      correct
-        ? h('p', { class: 'result' }, `Resposta certa: ${correct.text}. ${p.hits} de ${p.totalVotes} acertaram (+${p.points} pts cada).`)
-        : null,
+      p.houseWon
+        ? h('p', { class: 'result house' }, `🏠 A casa ganhou: nenhuma opção bateu. +${p.points} pts pra cada conta da casa.`)
+        : correct
+          ? h('p', { class: 'result' }, `Resposta certa: ${correct.text}. ${p.hits} de ${p.totalVotes} acertaram (+${p.points} pts cada).`)
+          : null,
       h('fieldset', {}, h('legend', {}, 'Resposta certa'), options),
       h('details', { class: 'voters' },
         h('summary', {}, `Quem votou (${p.totalVotes})`),
         p.options.map((o) => h('p', {}, h('b', {}, `${o.text}: `), o.voters.length ? o.voters.join(', ') : 'ninguém'))),
       h('div', { class: 'actions' },
         h('button', { class: 'btn', type: 'button', onclick: () => confirmAnswer(p, article) },
-          p.status === 'resolved' ? 'Atualizar resposta' : 'Confirmar resposta certa'),
+          p.status === 'resolved' && !p.houseWon ? 'Atualizar resposta' : 'Confirmar resposta certa'),
+        h('button', { class: 'btn ghost', type: 'button', onclick: () => confirmHouse(p) }, '🏠 A casa ganha'),
         p.status === 'open'
           ? h('button', { class: 'btn ghost', type: 'button', onclick: () => act(() => api(`/api/admin/polls/${p.id}/close`, { method: 'POST' }), 'Votação encerrada') }, 'Encerrar votação')
           : h('button', { class: 'btn ghost', type: 'button', onclick: () => reopen(p) }, 'Reabrir votação'),
@@ -193,6 +198,15 @@
     const text = p.options.find((o) => o.id === sel.value).text;
     if (!confirm(`Confirmar "${text}" como resposta certa? Os pontos do ranking serão calculados agora.`)) return;
     act(() => api(`/api/admin/polls/${p.id}/resolve`, { method: 'POST', body: { optionId: sel.value } }), 'Resposta salva e ranking atualizado');
+  }
+
+  function confirmHouse(p) {
+    if (!state.house.length) {
+      toast('Cadastre pelo menos uma conta da casa antes de usar essa opção.', true);
+      return;
+    }
+    if (!confirm(`Confirmar que nenhuma opção bateu em "${p.title}"? Os ${p.points} pts vão pra cada conta da casa (${state.house.length}).`)) return;
+    act(() => api(`/api/admin/polls/${p.id}/resolve`, { method: 'POST', body: { house: true } }), 'A casa ganhou e o ranking foi atualizado');
   }
 
   const reopenDialog = $('#reopen-dialog');
@@ -337,6 +351,150 @@
     } catch (err) {
       if (err.status === 401) handleError(err);
       else $('#streak-error').textContent = err.message;
+    }
+  });
+
+  /* ---------- Contas da casa ---------- */
+  async function loadHouse() {
+    try {
+      const { accounts } = await api('/api/admin/house-accounts');
+      state.house = accounts;
+      renderHouse();
+    } catch (e) {
+      handleError(e);
+    }
+  }
+
+  function renderHouse() {
+    const box = $('#house-list');
+    box.replaceChildren();
+    if (!state.house.length) {
+      box.append(h('p', { class: 'hint' }, 'Nenhuma conta da casa ainda.'));
+      return;
+    }
+    box.append(...state.house.map((acc) => h('div', { class: 'house-row' },
+      h('span', { class: 'nm' }, `🏠 ${acc.name}`),
+      h('button', { class: 'btn ghost small', type: 'button', onclick: () => renameHouse(acc) }, 'Renomear'),
+      h('button', { class: 'btn danger small', type: 'button', onclick: () => removeHouse(acc) }, 'Remover'))));
+  }
+
+  function renameHouse(acc) {
+    const name = prompt('Novo nome da conta da casa:', acc.name);
+    if (!name || !name.trim() || name.trim() === acc.name) return;
+    act(() => api(`/api/admin/house-accounts/${acc.id}`, { method: 'PUT', body: { name: name.trim() } }), 'Conta da casa renomeada')
+      .then(loadHouse);
+  }
+
+  function removeHouse(acc) {
+    if (!confirm(`Remover a conta "${acc.name}"? Os pontos dela somem do ranking.`)) return;
+    act(() => api(`/api/admin/house-accounts/${acc.id}`, { method: 'DELETE' }), 'Conta da casa removida').then(loadHouse);
+  }
+
+  $('#house-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const input = $('#house-name');
+    $('#house-error').textContent = '';
+    try {
+      await api('/api/admin/house-accounts', { method: 'POST', body: { name: input.value } });
+      input.value = '';
+      toast('Conta da casa criada');
+      loadHouse();
+    } catch (err) {
+      $('#house-error').textContent = err.message;
+    }
+  });
+
+  /* ---------- Conquistas ---------- */
+  async function loadAchievements() {
+    try {
+      const { achievements } = await api('/api/admin/achievements');
+      state.achievements = achievements;
+      renderAchievements();
+    } catch (e) {
+      handleError(e);
+    }
+  }
+
+  function achIcon(a) {
+    return a.imageUrl
+      ? h('img', { class: 'ach-thumb', src: a.imageUrl, alt: '' })
+      : h('span', { class: 'ach-thumb ph' }, a.emoji);
+  }
+
+  function renderAchievements() {
+    const box = $('#ach-list');
+    box.replaceChildren();
+    if (!state.achievements.length) {
+      box.append(h('p', { class: 'hint' }, 'Nenhum nível cadastrado ainda.'));
+      return;
+    }
+    const typeLabel = { points: 'pontos', streak: 'sequência' };
+    box.append(...state.achievements.map((a) => h('div', { class: 'house-row' },
+      achIcon(a),
+      h('span', { class: 'nm' }, `${a.label} — ${a.threshold} ${typeLabel[a.type]}`),
+      h('button', { class: 'btn ghost small', type: 'button', onclick: () => startEditAch(a) }, 'Editar'),
+      h('button', { class: 'btn danger small', type: 'button', onclick: () => removeAch(a) }, 'Remover'))));
+  }
+
+  function resetAchForm() {
+    state.achEditing = null;
+    $('#ach-form').reset();
+    $('#ach-threshold').value = 50;
+    $('#ach-submit').textContent = 'Adicionar nível';
+    $('#ach-cancel').hidden = true;
+    $('#ach-error').textContent = '';
+  }
+
+  function startEditAch(a) {
+    state.achEditing = a.id;
+    $('#ach-label').value = a.label;
+    $('#ach-type').value = a.type;
+    $('#ach-threshold').value = a.threshold;
+    $('#ach-emoji').value = a.emoji || '';
+    $('#ach-image').value = a.imageUrl || '';
+    $('#ach-submit').textContent = 'Salvar alterações';
+    $('#ach-cancel').hidden = false;
+    $('#ach-error').textContent = '';
+    $('#ach-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    $('#ach-label').focus({ preventScroll: true });
+  }
+
+  $('#ach-cancel').addEventListener('click', resetAchForm);
+
+  function removeAch(a) {
+    if (!confirm(`Remover o nível "${a.label}"? Quem já tinha esse emblema perde ele.`)) return;
+    if (state.achEditing === a.id) resetAchForm();
+    act(() => api(`/api/admin/achievements/${a.id}`, { method: 'DELETE' }), 'Nível removido').then(loadAchievements);
+  }
+
+  $('#ach-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    $('#ach-error').textContent = '';
+    const body = {
+      label: $('#ach-label').value,
+      type: $('#ach-type').value,
+      threshold: $('#ach-threshold').value,
+      emoji: $('#ach-emoji').value,
+      imageUrl: $('#ach-image').value,
+    };
+    const editing = state.achEditing;
+    const submit = $('#ach-submit');
+    submit.disabled = true;
+    try {
+      if (editing) {
+        await api(`/api/admin/achievements/${editing}`, { method: 'PUT', body });
+        toast('Nível atualizado');
+      } else {
+        await api('/api/admin/achievements', { method: 'POST', body });
+        toast('Nível criado');
+      }
+      resetAchForm();
+      await loadAchievements();
+    } catch (err) {
+      if (err.status === 401) handleError(err);
+      else $('#ach-error').textContent = err.message;
+    } finally {
+      submit.disabled = false;
     }
   });
 
