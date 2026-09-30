@@ -106,8 +106,10 @@ button, input, textarea { font: inherit; }
 .who .avatar { width: 1.85rem; height: 1.85rem; }
 
 @media (max-width: 640px) {
-  .top .wrap { grid-template-columns: 1fr auto; grid-template-areas: "brand who" "tabs tabs"; }
+  .top .wrap { grid-template-columns: 1fr; grid-template-areas: "brand" "who" "tabs"; }
   .brand { font-size: 2.3rem; }
+  .head-actions { justify-content: flex-end; flex-wrap: wrap; padding-bottom: 0.75rem; }
+  .me-name { overflow-wrap: normal; }
 }
 
 /* ---------- Botões e campos ---------- */
@@ -465,6 +467,35 @@ dialog::backdrop { background: rgba(20, 35, 122, 0.55); }
   background: var(--ticket);
 }
 .panel.narrow { max-width: 26rem; margin-inline: auto; }
+.panel.narrow-md { max-width: 34rem; }
+
+/* ---------- Abas do painel admin ---------- */
+.admin-tabs {
+  display: flex;
+  gap: 0.35rem;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: 0 0 1.5rem;
+  padding-bottom: 2px;
+  border-bottom: 2px solid var(--ink);
+}
+.admin-tabs button {
+  flex: none;
+  padding: 0.55rem 0.9rem 0.5rem;
+  border: 0;
+  border-bottom: 4px solid transparent;
+  border-radius: 6px 6px 0 0;
+  background: none;
+  color: var(--ink-soft);
+  font-weight: 700;
+  font-size: 1rem;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: transform 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+}
+.admin-tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); }
+.admin-tabs button:hover { background: var(--ink); color: var(--ticket); transform: scale(1.05); }
+@media (max-width: 640px) { .admin-tabs { gap: 0.15rem; } .admin-tabs button { padding: 0.5rem 0.65rem 0.45rem; font-size: 0.92rem; } }
 .panel h1 { margin-bottom: 1rem; font-size: 2.2rem; }
 .panel h2 { margin-bottom: 1rem; font-size: 1.6rem; }
 .list-title { font-size: 1.6rem; }
@@ -480,6 +511,7 @@ dialog::backdrop { background: rgba(20, 35, 122, 0.55); }
   gap: 1.5rem;
   align-items: start;
 }
+.admin-grid > form { min-width: 0; }
 @media (max-width: 860px) { .admin-grid { grid-template-columns: 1fr; } }
 
 .alist { display: grid; gap: 1.25rem; }
