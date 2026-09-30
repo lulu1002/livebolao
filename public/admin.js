@@ -77,10 +77,23 @@
     $('#admin-pass').focus();
   }
 
+  const ADMIN_TABS = ['polls', 'house', 'streak', 'ach', 'backup'];
+
+  function setAdminTab(tab) {
+    if (!ADMIN_TABS.includes(tab)) tab = 'polls';
+    ADMIN_TABS.forEach((t) => {
+      $(`#apane-${t}`).hidden = t !== tab;
+      $(`#atab-${t}`).setAttribute('aria-selected', String(t === tab));
+    });
+    history.replaceState(null, '', tab === 'polls' ? location.pathname : `#${tab}`);
+  }
+  ADMIN_TABS.forEach((t) => $(`#atab-${t}`).addEventListener('click', () => setAdminTab(t)));
+
   function showPanel() {
     $('#login').hidden = true;
     $('#panel').hidden = false;
     $('#logout').hidden = false;
+    setAdminTab(location.hash.slice(1));
     loadPolls();
   }
 

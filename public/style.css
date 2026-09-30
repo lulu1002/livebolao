@@ -75,10 +75,27 @@ button, input, textarea { font: inherit; }
 }
 .tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); }
 .tabs button:hover { background: var(--ink); color: var(--ticket); transform: scale(1.05); }
-.head-actions { grid-area: who; display: flex; align-items: center; gap: 0.5rem; padding-bottom: 0.6rem; }
+.head-actions { grid-area: who; display: flex; align-items: center; gap: 0.35rem; padding-bottom: 0.6rem; }
 .who { display: flex; align-items: center; gap: 0.6rem; }
-.btn.is-on { background: var(--hit); border-color: var(--hit); color: #fff; }
-.btn.is-on:hover { background: #0A7444; border-color: #0A7444; }
+
+/* Sino de notificação: ícone discreto, sem moldura, só destaca no hover/ativo */
+.icon-btn {
+  flex: none;
+  width: 2.25rem;
+  height: 2.25rem;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.65;
+  transition: opacity 0.15s ease, background-color 0.15s ease, transform 0.15s ease;
+}
+.icon-btn:hover { opacity: 1; background: rgba(20, 35, 122, 0.08); transform: scale(1.08); }
+.icon-btn.is-on { opacity: 1; }
 .me-name {
   padding: 0.25rem 0.6rem;
   border-radius: 999px;
@@ -108,7 +125,7 @@ button, input, textarea { font: inherit; }
 @media (max-width: 640px) {
   .top .wrap { grid-template-columns: 1fr; grid-template-areas: "brand" "who" "tabs"; }
   .brand { font-size: 2.3rem; }
-  .head-actions { justify-content: flex-end; flex-wrap: wrap; padding-bottom: 0.75rem; }
+  .head-actions { justify-content: flex-start; flex-wrap: wrap; padding-bottom: 0.75rem; }
   .me-name { overflow-wrap: normal; }
 }
 

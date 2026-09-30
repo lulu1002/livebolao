@@ -74,7 +74,9 @@
     const btn = $('#notify-toggle');
     const sub = await currentSubscription();
     const on = Boolean(sub) && Notification.permission === 'granted';
-    btn.textContent = on ? '🔔 Notificações ativas' : '🔕 Ativar notificações';
+    btn.textContent = on ? '🔔' : '🔕';
+    btn.title = on ? 'Notificações ativas — toque para desativar' : 'Ativar notificações';
+    btn.setAttribute('aria-label', btn.title);
     btn.classList.toggle('is-on', on);
   }
 

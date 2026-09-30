@@ -3,7 +3,7 @@
 Enquetes com palpites e ranking. O admin publica a enquete, os participantes entram com a Twitch e votam, e no final o admin define a resposta certa: quem acertou soma pontos.
 
 - Site: `/` (enquetes e ranking, atualiza sozinho)
-- Painel admin: `/admin` (protegido por `ADMIN_PASSWORD`)
+- Painel admin: `/admin` (protegido por `ADMIN_PASSWORD`), organizado em abas — Enquetes, Casa, Bônus, Conquistas, Backup — responsivo tanto no celular quanto no PC
 - Stack: Node.js + Express + Postgres (Supabase), frontend em HTML/CSS/JS puro
 - No ranking aparece o nome e a foto da conta Twitch de cada participante
 
