@@ -169,7 +169,7 @@
       h('p', { class: 'meta' }, meta),
       p.description ? h('p', { class: 'desc' }, p.description) : null,
       p.houseWon
-        ? h('p', { class: 'result house' }, `🏠 A casa ganhou: nenhuma opção bateu. +${p.points} pts pra cada conta da casa.`)
+        ? h('p', { class: 'result house' }, `A casa ganhou: nenhuma opção bateu. +${p.points} pts pra cada conta da casa.`)
         : correct
           ? h('p', { class: 'result' }, `Resposta certa: ${correct.text}. ${p.hits} de ${p.totalVotes} acertaram (+${p.points} pts cada).`)
           : null,
@@ -180,7 +180,7 @@
       h('div', { class: 'actions' },
         h('button', { class: 'btn', type: 'button', onclick: () => confirmAnswer(p, article) },
           p.status === 'resolved' && !p.houseWon ? 'Atualizar resposta' : 'Confirmar resposta certa'),
-        h('button', { class: 'btn ghost', type: 'button', onclick: () => confirmHouse(p) }, '🏠 A casa ganha'),
+        h('button', { class: 'btn ghost', type: 'button', onclick: () => confirmHouse(p) }, ' A casa ganha'),
         p.status === 'open'
           ? h('button', { class: 'btn ghost', type: 'button', onclick: () => act(() => api(`/api/admin/polls/${p.id}/close`, { method: 'POST' }), 'Votação encerrada') }, 'Encerrar votação')
           : h('button', { class: 'btn ghost', type: 'button', onclick: () => reopen(p) }, 'Reabrir votação'),
@@ -406,7 +406,7 @@
   function houseThumb(acc) {
     return acc.avatarUrl
       ? h('img', { class: 'ach-thumb', src: acc.avatarUrl, alt: '' })
-      : h('span', { class: 'ach-thumb ph' }, '🏠');
+      : h('span', { class: 'ach-thumb ph' }, '');
   }
 
   function renderHouse() {
