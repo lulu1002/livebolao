@@ -167,7 +167,7 @@
     if (url) {
       return h('img', { class: cls, src: url, alt: '', width: '36', height: '36', loading: 'lazy', referrerpolicy: 'no-referrer' });
     }
-    if (isHouse) return h('span', { class: `${cls} ph house`, 'aria-hidden': 'true' }, '🏠');
+    if (isHouse) return h('span', { class: `${cls} ph house`, 'aria-hidden': 'true' }, '');
     return h('span', { class: `${cls} ph`, 'aria-hidden': 'true' }, (name || '?').slice(0, 1).toUpperCase());
   }
 
