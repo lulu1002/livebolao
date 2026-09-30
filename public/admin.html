@@ -87,14 +87,22 @@
 
       <section class="panel data" id="house-panel">
         <h2>Contas da casa</h2>
-        <p class="hint">Quando nenhuma opção bate, resolva a enquete como "🏠 A casa ganha" e os pontos vão pra essas contas.</p>
+        <p class="hint">Quando nenhuma opção bate, resolva a enquete como "🏠 A casa ganha" e escolha pra qual(is) dessas contas os pontos vão.</p>
         <form id="house-form">
+          <input type="hidden" id="house-id" value="">
           <div class="field">
             <label for="house-name">Nome da conta</label>
             <input id="house-name" maxlength="40" placeholder="Ex.: A Casa" required>
           </div>
+          <div class="field">
+            <label for="house-image">Imagem (link https, opcional)</label>
+            <input id="house-image" type="url" placeholder="https://...">
+          </div>
           <p class="error" id="house-error" role="alert"></p>
-          <button class="btn" type="submit">Adicionar conta</button>
+          <div class="actions">
+            <button class="btn" id="house-submit" type="submit">Adicionar conta</button>
+            <button class="btn ghost" id="house-cancel" type="button" hidden>Cancelar edição</button>
+          </div>
         </form>
         <div id="house-list" class="house-list"></div>
       </section>
@@ -182,6 +190,22 @@
         <p class="hint">Os pontos dela saem do ranking. Os votos são mantidos e os participantes podem trocá-los.</p>
       </div>
       <button class="btn ghost" id="reopen-cancel" type="button">Cancelar</button>
+    </div>
+  </dialog>
+
+  <dialog id="house-win-dialog" aria-labelledby="house-win-title">
+    <div class="dlg">
+      <h2 id="house-win-title">🏠 A casa ganha</h2>
+      <p class="poll-name" id="house-win-name"></p>
+      <p>Nenhuma opção bateu. Escolha pra quais contas da casa os pontos vão:</p>
+      <form id="house-win-form">
+        <div id="house-win-options" class="house-win-options"></div>
+        <p class="error" id="house-win-error" role="alert"></p>
+        <div class="actions">
+          <button class="btn" type="submit">Confirmar</button>
+          <button class="btn ghost" id="house-win-cancel" type="button">Cancelar</button>
+        </div>
+      </form>
     </div>
   </dialog>
 

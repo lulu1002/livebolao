@@ -354,6 +354,7 @@ dialog::backdrop { background: rgba(20, 35, 122, 0.55); }
 .choices { display: grid; gap: 0.35rem; margin: 1rem 0; }
 .choices .btn { width: 100%; text-align: left; }
 .choices .hint { margin: 0 0 0.75rem; }
+.house-win-options { display: grid; gap: 0.2rem; max-height: 40vh; overflow-y: auto; margin: 0.75rem 0; }
 
 /* ---------- Perfil ---------- */
 .profile-head { display: flex; align-items: center; gap: 1rem; margin-top: 1.25rem; }

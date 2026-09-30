@@ -2,7 +2,7 @@
   'use strict';
 
   const $ = (sel, root = document) => root.querySelector(sel);
-  const state = { polls: [], users: 0, editing: null, mode: 'replace', streak: { every: 0, bonus: 0 }, house: [], achievements: [], achEditing: null };
+  const state = { polls: [], users: 0, editing: null, mode: 'replace', streak: { every: 0, bonus: 0 }, house: [], houseEditing: null, achievements: [], achEditing: null };
 
   /* ---------- Utilidades ---------- */
   function h(tag, attrs = {}, ...children) {
@@ -200,14 +200,39 @@
     act(() => api(`/api/admin/polls/${p.id}/resolve`, { method: 'POST', body: { optionId: sel.value } }), 'Resposta salva e ranking atualizado');
   }
 
+  const houseWinDialog = $('#house-win-dialog');
+  let houseWinTarget = null;
+
   function confirmHouse(p) {
     if (!state.house.length) {
       toast('Cadastre pelo menos uma conta da casa antes de usar essa opção.', true);
       return;
     }
-    if (!confirm(`Confirmar que nenhuma opção bateu em "${p.title}"? Os ${p.points} pts vão pra cada conta da casa (${state.house.length}).`)) return;
-    act(() => api(`/api/admin/polls/${p.id}/resolve`, { method: 'POST', body: { house: true } }), 'A casa ganhou e o ranking foi atualizado');
+    houseWinTarget = p;
+    $('#house-win-name').textContent = `${p.title} — ${p.points} pts`;
+    $('#house-win-error').textContent = '';
+    $('#house-win-options').replaceChildren(...state.house.map((acc, i) => h('label', { class: 'aopt' },
+      h('input', { type: 'checkbox', name: 'house-win', value: acc.id, checked: i === 0 ? true : null }),
+      houseThumb(acc),
+      h('span', {}, acc.name))));
+    houseWinDialog.showModal();
   }
+
+  $('#house-win-cancel').addEventListener('click', () => houseWinDialog.close());
+  houseWinDialog.addEventListener('click', (e) => { if (e.target === houseWinDialog) houseWinDialog.close(); });
+
+  $('#house-win-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const ids = [...$('#house-win-options').querySelectorAll('input:checked')].map((i) => i.value);
+    if (!ids.length) {
+      $('#house-win-error').textContent = 'Escolha pelo menos uma conta.';
+      return;
+    }
+    const p = houseWinTarget;
+    houseWinDialog.close();
+    act(() => api(`/api/admin/polls/${p.id}/resolve`, { method: 'POST', body: { house: true, houseIds: ids } }),
+      'A casa ganhou e o ranking foi atualizado');
+  });
 
   const reopenDialog = $('#reopen-dialog');
   let reopenTarget = null;
@@ -365,6 +390,12 @@
     }
   }
 
+  function houseThumb(acc) {
+    return acc.avatarUrl
+      ? h('img', { class: 'ach-thumb', src: acc.avatarUrl, alt: '' })
+      : h('span', { class: 'ach-thumb ph' }, '🏠');
+  }
+
   function renderHouse() {
     const box = $('#house-list');
     box.replaceChildren();
@@ -373,34 +404,61 @@
       return;
     }
     box.append(...state.house.map((acc) => h('div', { class: 'house-row' },
-      h('span', { class: 'nm' }, `🏠 ${acc.name}`),
-      h('button', { class: 'btn ghost small', type: 'button', onclick: () => renameHouse(acc) }, 'Renomear'),
+      houseThumb(acc),
+      h('span', { class: 'nm' }, acc.name),
+      h('button', { class: 'btn ghost small', type: 'button', onclick: () => startEditHouse(acc) }, 'Editar'),
       h('button', { class: 'btn danger small', type: 'button', onclick: () => removeHouse(acc) }, 'Remover'))));
   }
 
-  function renameHouse(acc) {
-    const name = prompt('Novo nome da conta da casa:', acc.name);
-    if (!name || !name.trim() || name.trim() === acc.name) return;
-    act(() => api(`/api/admin/house-accounts/${acc.id}`, { method: 'PUT', body: { name: name.trim() } }), 'Conta da casa renomeada')
-      .then(loadHouse);
+  function resetHouseForm() {
+    state.houseEditing = null;
+    $('#house-form').reset();
+    $('#house-submit').textContent = 'Adicionar conta';
+    $('#house-cancel').hidden = true;
+    $('#house-error').textContent = '';
   }
+
+  function startEditHouse(acc) {
+    state.houseEditing = acc.id;
+    $('#house-name').value = acc.name;
+    $('#house-image').value = acc.avatarUrl || '';
+    $('#house-submit').textContent = 'Salvar alterações';
+    $('#house-cancel').hidden = false;
+    $('#house-error').textContent = '';
+    $('#house-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    $('#house-name').focus({ preventScroll: true });
+  }
+
+  $('#house-cancel').addEventListener('click', resetHouseForm);
 
   function removeHouse(acc) {
     if (!confirm(`Remover a conta "${acc.name}"? Os pontos dela somem do ranking.`)) return;
+    if (state.houseEditing === acc.id) resetHouseForm();
     act(() => api(`/api/admin/house-accounts/${acc.id}`, { method: 'DELETE' }), 'Conta da casa removida').then(loadHouse);
   }
 
   $('#house-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const input = $('#house-name');
     $('#house-error').textContent = '';
+    const body = { name: $('#house-name').value, avatarUrl: $('#house-image').value };
+    const editing = state.houseEditing;
+    const submit = $('#house-submit');
+    submit.disabled = true;
     try {
-      await api('/api/admin/house-accounts', { method: 'POST', body: { name: input.value } });
-      input.value = '';
-      toast('Conta da casa criada');
-      loadHouse();
+      if (editing) {
+        await api(`/api/admin/house-accounts/${editing}`, { method: 'PUT', body });
+        toast('Conta da casa atualizada');
+      } else {
+        await api('/api/admin/house-accounts', { method: 'POST', body });
+        toast('Conta da casa criada');
+      }
+      resetHouseForm();
+      await loadHouse();
     } catch (err) {
-      $('#house-error').textContent = err.message;
+      if (err.status === 401) handleError(err);
+      else $('#house-error').textContent = err.message;
+    } finally {
+      submit.disabled = false;
     }
   });
 

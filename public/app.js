@@ -162,10 +162,10 @@
   // Foto da Twitch, ou a inicial do nome quando não há foto
   function avatarEl(name, url, size = '', isHouse = false) {
     const cls = `avatar${size ? ` ${size}` : ''}`;
-    if (isHouse) return h('span', { class: `${cls} ph house`, 'aria-hidden': 'true' }, '🏠');
     if (url) {
       return h('img', { class: cls, src: url, alt: '', width: '36', height: '36', loading: 'lazy', referrerpolicy: 'no-referrer' });
     }
+    if (isHouse) return h('span', { class: `${cls} ph house`, 'aria-hidden': 'true' }, '🏠');
     return h('span', { class: `${cls} ph`, 'aria-hidden': 'true' }, (name || '?').slice(0, 1).toUpperCase());
   }
 

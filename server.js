@@ -884,10 +884,12 @@ app.post('/api/admin/polls/:id/resolve', requireAdmin, wrap(async (req, res) => 
 
   if (req.body?.house === true) {
     // "A casa ganha": ninguém acertou. Cria (se ainda não existir) uma opção
-    // oculta pra essa enquete e "vota" nela por todas as contas da casa.
-    const { rows: house } = await q('select id from users where is_house limit 500');
+    // oculta pra essa enquete e "vota" nela só pelas contas da casa escolhidas.
+    const ids = Array.isArray(req.body?.houseIds) ? req.body.houseIds.map(String) : [];
+    if (!ids.length) return res.status(400).json({ error: 'Escolha pelo menos uma conta da casa.' });
+    const { rows: house } = await q('select id from users where is_house and id = any($1::text[])', [ids]);
     if (!house.length) {
-      return res.status(400).json({ error: 'Cadastre pelo menos uma conta da casa antes de usar essa opção.' });
+      return res.status(400).json({ error: 'Nenhuma das contas escolhidas existe mais. Recarregue a página.' });
     }
     optionId = await tx(async (c) => {
       const existing = await c.query('select id from poll_options where poll_id = $1 and is_house limit 1', [req.params.id]);
@@ -928,31 +930,43 @@ app.post('/api/admin/polls/:id/resolve', requireAdmin, wrap(async (req, res) => 
 }));
 
 /* ---------- Contas da casa (fictícias) ---------- */
-const HOUSE_NAME_RE = /^.{2,40}$/u;
+function parseHouseInput(body) {
+  const name = String(body?.name ?? '').trim().replace(/\s+/g, ' ');
+  if (name.length < 2 || name.length > 40) return { error: 'O nome precisa ter de 2 a 40 caracteres.' };
+  let avatarUrl = String(body?.avatarUrl ?? '').trim();
+  if (avatarUrl && (!avatarUrl.startsWith('https://') || avatarUrl.length > 500)) {
+    return { error: 'A imagem precisa ser um link https:// válido.' };
+  }
+  return { name, avatarUrl: avatarUrl || null };
+}
 
 app.get('/api/admin/house-accounts', requireAdmin, wrap(async (req, res) => {
   const { rows } = await q(
-    'select id, display_name, created_at from users where is_house order by created_at'
+    'select id, display_name, avatar_url, created_at from users where is_house order by created_at'
   );
-  res.json({ accounts: rows.map((r) => ({ id: r.id, name: r.display_name, createdAt: iso(r.created_at) })) });
+  res.json({
+    accounts: rows.map((r) => ({ id: r.id, name: r.display_name, avatarUrl: r.avatar_url, createdAt: iso(r.created_at) })),
+  });
 }));
 
 app.post('/api/admin/house-accounts', requireAdmin, wrap(async (req, res) => {
-  const name = String(req.body?.name ?? '').trim().replace(/\s+/g, ' ');
-  if (!HOUSE_NAME_RE.test(name)) return res.status(400).json({ error: 'O nome precisa ter de 2 a 40 caracteres.' });
+  const input = parseHouseInput(req.body);
+  if (input.error) return res.status(400).json({ error: input.error });
   const id = uid();
   await q(
-    `insert into users (id, twitch_id, login, display_name, is_house)
-     values ($1, $2, $3, $4, true)`,
-    [id, `house:${id}`, `casa-${id.slice(0, 8)}`, name]
+    `insert into users (id, twitch_id, login, display_name, avatar_url, is_house)
+     values ($1, $2, $3, $4, $5, true)`,
+    [id, `house:${id}`, `casa-${id.slice(0, 8)}`, input.name, input.avatarUrl]
   );
-  res.status(201).json({ id, name });
+  res.status(201).json({ id, name: input.name });
 }));
 
 app.put('/api/admin/house-accounts/:id', requireAdmin, wrap(async (req, res) => {
-  const name = String(req.body?.name ?? '').trim().replace(/\s+/g, ' ');
-  if (!HOUSE_NAME_RE.test(name)) return res.status(400).json({ error: 'O nome precisa ter de 2 a 40 caracteres.' });
-  const r = await q('update users set display_name = $2 where id = $1 and is_house', [req.params.id, name]);
+  const input = parseHouseInput(req.body);
+  if (input.error) return res.status(400).json({ error: input.error });
+  const r = await q('update users set display_name = $2, avatar_url = $3 where id = $1 and is_house', [
+    req.params.id, input.name, input.avatarUrl,
+  ]);
   if (!r.rowCount) return res.status(404).json({ error: 'Conta da casa não encontrada.' });
   res.json({ ok: true });
 }));
