@@ -2,7 +2,7 @@
   'use strict';
 
   const $ = (sel, root = document) => root.querySelector(sel);
-  const state = { polls: [], users: 0, editing: null, mode: 'replace', streak: { every: 0, bonus: 0 }, house: [], houseEditing: null, achievements: [], achEditing: null };
+  const state = { polls: [], users: 0, editing: null, mode: 'replace', streak: { every: 0, bonus: 0 }, notify: true, pushEnabled: true, house: [], houseEditing: null, achievements: [], achEditing: null };
 
   /* ---------- Utilidades ---------- */
   function h(tag, attrs = {}, ...children) {
@@ -122,7 +122,10 @@
       state.users = data.users;
       state.mode = data.mode;
       state.streak = data.streak;
+      state.notify = data.notify;
+      state.pushEnabled = data.pushEnabled;
       renderMode();
+      renderNotify();
       renderStreak();
       renderList();
       loadHouse();
@@ -169,7 +172,7 @@
       h('p', { class: 'meta' }, meta),
       p.description ? h('p', { class: 'desc' }, p.description) : null,
       p.houseWon
-        ? h('p', { class: 'result house' }, `A casa ganhou: nenhuma opção bateu. +${p.points} pts pra cada conta da casa.`)
+        ? h('p', { class: 'result house' }, `🏠 A casa ganhou: nenhuma opção bateu. +${p.points} pts pra cada conta da casa.`)
         : correct
           ? h('p', { class: 'result' }, `Resposta certa: ${correct.text}. ${p.hits} de ${p.totalVotes} acertaram (+${p.points} pts cada).`)
           : null,
@@ -180,7 +183,7 @@
       h('div', { class: 'actions' },
         h('button', { class: 'btn', type: 'button', onclick: () => confirmAnswer(p, article) },
           p.status === 'resolved' && !p.houseWon ? 'Atualizar resposta' : 'Confirmar resposta certa'),
-        h('button', { class: 'btn ghost', type: 'button', onclick: () => confirmHouse(p) }, ' A casa ganha'),
+        h('button', { class: 'btn ghost', type: 'button', onclick: () => confirmHouse(p) }, '🏠 A casa ganha'),
         p.status === 'open'
           ? h('button', { class: 'btn ghost', type: 'button', onclick: () => act(() => api(`/api/admin/polls/${p.id}/close`, { method: 'POST' }), 'Votação encerrada') }, 'Encerrar votação')
           : h('button', { class: 'btn ghost', type: 'button', onclick: () => reopen(p) }, 'Reabrir votação'),
@@ -247,41 +250,61 @@
       'A casa ganhou e o ranking foi atualizado');
   });
 
-  const reopenDialog = $('#reopen-dialog');
-  let reopenTarget = null;
+  // Diálogo "o que fazer com os pontos" — compartilhado entre reabrir e excluir
+  const pointsDialog = $('#reopen-dialog');
+  let pointsDialogTarget = null; // { poll, action: 'reopen' | 'delete' }
+
+  function openPointsDialog(p, action) {
+    pointsDialogTarget = { poll: p, action };
+    $('#reopen-title').textContent = action === 'reopen' ? 'Reabrir votação' : 'Excluir enquete';
+    $('#reopen-name').textContent = p.title;
+    $('#reopen-desc').textContent =
+      action === 'reopen'
+        ? 'Esta enquete já tem resposta e soma pontos no ranking. O que fazer com esses pontos?'
+        : 'Esta enquete já tem resposta e soma pontos no ranking. O que fazer com esses pontos antes de excluir?';
+    $('#reopen-hint-keep').textContent =
+      action === 'reopen'
+        ? 'Os pontos continuam no ranking e os votos desta enquete são limpos, para valer como uma nova rodada.'
+        : 'Os pontos já conquistados continuam no ranking, guardados. A enquete e os votos são apagados.';
+    $('#reopen-hint-zero').textContent =
+      action === 'reopen'
+        ? 'Os pontos dela saem do ranking. Os votos são mantidos e os participantes podem trocá-los.'
+        : 'Os pontos dela não entram no ranking. A enquete e os votos são apagados.';
+    pointsDialog.showModal();
+  }
 
   function doReopen(p, points) {
     act(() => api(`/api/admin/polls/${p.id}/reopen`, { method: 'POST', body: points ? { points } : undefined }), 'Votação reaberta');
   }
 
+  function doRemove(p, points) {
+    if (state.editing === p.id) resetForm();
+    act(() => api(`/api/admin/polls/${p.id}`, { method: 'DELETE', body: points ? { points } : undefined }), 'Enquete excluída');
+  }
+
   function reopen(p) {
     // Com resposta e pontos valendo no ranking: pergunta o que fazer com os pontos
-    if (p.status === 'resolved' && p.counted) {
-      reopenTarget = p;
-      $('#reopen-name').textContent = p.title;
-      reopenDialog.showModal();
-      return;
-    }
+    if (p.status === 'resolved' && p.counted) return openPointsDialog(p, 'reopen');
     if (!confirm(`Reabrir a votação de "${p.title}"?`)) return;
     doReopen(p);
   }
 
-  reopenDialog.querySelectorAll('[data-choice]').forEach((b) => b.addEventListener('click', () => {
-    const p = reopenTarget;
-    reopenDialog.close();
-    if (p) doReopen(p, b.dataset.choice);
-  }));
-  $('#reopen-cancel').addEventListener('click', () => reopenDialog.close());
-  reopenDialog.addEventListener('click', (e) => { if (e.target === reopenDialog) reopenDialog.close(); });
-
   function remove(p) {
-    const keep = p.status === 'resolved' && p.counted
-      ? ' Os pontos já conquistados continuam no ranking.'
-      : ' Como não tem resposta definida, ela não gera pontos.';
-    if (!confirm(`Excluir "${p.title}" e os votos dela?${keep} Isso não pode ser desfeito.`)) return;
-    if (state.editing === p.id) resetForm();
-    act(() => api(`/api/admin/polls/${p.id}`, { method: 'DELETE' }), 'Enquete excluída');
+    if (p.status === 'resolved' && p.counted) return openPointsDialog(p, 'delete');
+    if (!confirm(`Excluir "${p.title}" e os votos dela? Como não tem resposta definida, ela não gera pontos. Isso não pode ser desfeito.`)) return;
+    doRemove(p);
   }
+
+  pointsDialog.querySelectorAll('[data-choice]').forEach((b) => b.addEventListener('click', () => {
+    const target = pointsDialogTarget;
+    pointsDialog.close();
+    if (!target) return;
+    const { poll, action } = target;
+    if (action === 'reopen') doReopen(poll, b.dataset.choice);
+    else doRemove(poll, b.dataset.choice);
+  }));
+  $('#reopen-cancel').addEventListener('click', () => pointsDialog.close());
+  pointsDialog.addEventListener('click', (e) => { if (e.target === pointsDialog) pointsDialog.close(); });
 
   /* ---------- Formulário (criar e editar) ---------- */
   function resetForm() {
@@ -289,11 +312,13 @@
     $('#poll-form').reset();
     $('#f-points').value = 10;
     $('#f-options').disabled = false;
-    $('#f-options-hint').textContent = 'De 2 a 10 opções, uma por linha.';
+    $('#f-options-hint').textContent = 'De 1 a 10 opções, uma por linha.';
     $('#form-title').textContent = 'Nova enquete';
     $('#form-submit').textContent = 'Publicar enquete';
     $('#form-cancel').hidden = true;
     $('#form-error').textContent = '';
+    $('#f-notify-field').hidden = false;
+    renderNotify();
   }
 
   function startEdit(p) {
@@ -305,6 +330,7 @@
     $('#f-options-hint').textContent = 'As opções não podem ser alteradas depois de publicar.';
     $('#f-points').value = p.points;
     $('#f-closes').value = toLocalInput(p.closesAt);
+    $('#f-notify-field').hidden = true; // editar não envia notificação
     $('#form-title').textContent = 'Editar enquete';
     $('#form-submit').textContent = 'Salvar alterações';
     $('#form-cancel').hidden = false;
@@ -326,7 +352,10 @@
       closesAt: closes ? new Date(closes).toISOString() : null,
     };
     const editing = state.editing;
-    if (!editing) body.options = $('#f-options').value.split('\n');
+    if (!editing) {
+      body.options = $('#f-options').value.split('\n');
+      body.notify = $('#f-notify').checked;
+    }
 
     const submit = $('#form-submit');
     submit.disabled = true;
@@ -336,7 +365,7 @@
         toast('Alterações salvas');
       } else {
         await api('/api/admin/polls', { method: 'POST', body });
-        toast('Enquete publicada');
+        toast(body.notify && state.notify && state.pushEnabled ? 'Enquete publicada e inscritos avisados' : 'Enquete publicada (sem notificação)');
       }
       resetForm();
       await loadPolls();
@@ -345,6 +374,34 @@
       else $('#form-error').textContent = err.message;
     } finally {
       submit.disabled = false;
+    }
+  });
+
+  /* ---------- Notificações: chave geral e caixa por enquete ---------- */
+  function renderNotify() {
+    const g = $('#notify-global');
+    g.checked = state.notify;
+    g.disabled = !state.pushEnabled;
+    $('#notify-global-hint').textContent = state.pushEnabled
+      ? 'Chave geral: desligada, nenhuma publicação envia notificação, mesmo com a caixa da enquete marcada.'
+      : 'As notificações push não estão configuradas neste servidor (faltam as chaves VAPID).';
+    const f = $('#f-notify');
+    f.disabled = !state.pushEnabled || !state.notify;
+    $('#f-notify-hint').textContent = !state.pushEnabled || !state.notify
+      ? 'Desativado: as notificações estão desligadas na chave geral acima.'
+      : 'Desmarque para publicar sem avisar ninguém.';
+  }
+
+  $('#notify-global').addEventListener('change', async (e) => {
+    const value = e.target.checked;
+    try {
+      await api('/api/admin/settings', { method: 'POST', body: { notify: value } });
+      state.notify = value;
+      renderNotify();
+      toast(value ? 'Notificações de enquete nova ligadas' : 'Notificações de enquete nova desligadas');
+    } catch (err) {
+      renderNotify();
+      handleError(err);
     }
   });
 
@@ -364,9 +421,14 @@
     }
   }));
 
-  $('#reset-ranking').addEventListener('click', () => {
-    if (!confirm('Zerar o ranking? Todos os pontos voltam para 0 e isso não pode ser desfeito. Considere baixar um backup antes.')) return;
-    act(() => api('/api/admin/ranking/reset', { method: 'POST' }), 'Ranking zerado');
+  $('#reset-weekly').addEventListener('click', () => {
+    if (!confirm('Zerar o ranking semanal? Os pontos desta semana voltam pra 0, mas o ranking geral continua igual.')) return;
+    act(() => api('/api/admin/ranking/reset-weekly', { method: 'POST' }), 'Ranking semanal zerado');
+  });
+
+  $('#reset-general').addEventListener('click', () => {
+    if (!confirm('Zerar o ranking geral? Isso também zera o semanal junto. Os emblemas já conquistados continuam com quem tem, mas os pontos de todo mundo voltam pra 0. Considere baixar um backup antes.')) return;
+    act(() => api('/api/admin/ranking/reset-general', { method: 'POST' }), 'Ranking geral zerado');
   });
 
   /* ---------- Bônus de sequência ---------- */
@@ -406,7 +468,7 @@
   function houseThumb(acc) {
     return acc.avatarUrl
       ? h('img', { class: 'ach-thumb', src: acc.avatarUrl, alt: '' })
-      : h('span', { class: 'ach-thumb ph' }, '');
+      : h('span', { class: 'ach-thumb ph' }, '🏠');
   }
 
   function renderHouse() {
@@ -499,10 +561,14 @@
       box.append(h('p', { class: 'hint' }, 'Nenhum nível cadastrado ainda.'));
       return;
     }
-    const typeLabel = { points: 'pontos', streak: 'sequência' };
-    box.append(...state.achievements.map((a) => h('div', { class: 'house-row' },
+    const typeLabel = { points: 'pontos', streak: 'acertos seguidos', misses: 'erros', missstreak: 'erros seguidos' };
+    box.append(...state.achievements.map((a) => h('div', { class: 'house-row', style: a.active ? '' : 'opacity: 0.55' },
       achIcon(a),
-      h('span', { class: 'nm' }, `${a.label} — ${a.threshold} ${typeLabel[a.type]}`),
+      h('span', { class: 'nm' }, `${a.label} — ${a.threshold} ${typeLabel[a.type]}${a.active ? '' : ' (oculta)'}`),
+      h('button', {
+        class: 'btn ghost small', type: 'button',
+        onclick: () => toggleAch(a),
+      }, a.active ? 'Ocultar' : 'Mostrar'),
       h('button', { class: 'btn ghost small', type: 'button', onclick: () => startEditAch(a) }, 'Editar'),
       h('button', { class: 'btn danger small', type: 'button', onclick: () => removeAch(a) }, 'Remover'))));
   }
@@ -531,6 +597,13 @@
   }
 
   $('#ach-cancel').addEventListener('click', resetAchForm);
+
+  function toggleAch(a) {
+    act(
+      () => api(`/api/admin/achievements/${a.id}/active`, { method: 'POST', body: { active: !a.active } }),
+      a.active ? 'Conquista oculta para os participantes' : 'Conquista visível para os participantes'
+    ).then(loadAchievements);
+  }
 
   function removeAch(a) {
     if (!confirm(`Remover o nível "${a.label}"? Quem já tinha esse emblema perde ele.`)) return;

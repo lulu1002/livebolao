@@ -54,6 +54,11 @@
             <label class="aopt"><input type="radio" name="mode" value="accumulate"><span>Acumular com as anteriores</span></label>
             <span class="hint">Enquetes substituídas saem da página, mas continuam aqui no painel e valem pontos quando você define a resposta.</span>
           </fieldset>
+          <fieldset class="modes">
+            <legend>Notificações de enquete nova</legend>
+            <label class="aopt"><input type="checkbox" id="notify-global"><span>Avisar os inscritos quando uma enquete for publicada</span></label>
+            <span class="hint" id="notify-global-hint">Chave geral: desligada, nenhuma publicação envia notificação, mesmo com a caixa da enquete marcada.</span>
+          </fieldset>
           <form id="poll-form">
             <div class="field">
               <label for="f-title">Pergunta</label>
@@ -66,7 +71,7 @@
             <div class="field">
               <label for="f-options">Opções</label>
               <textarea id="f-options" rows="4" placeholder="Uma opção por linha"></textarea>
-              <span class="hint" id="f-options-hint">De 2 a 10 opções, uma por linha.</span>
+              <span class="hint" id="f-options-hint">De 1 a 10 opções, uma por linha.</span>
             </div>
             <div class="field">
               <label for="f-points">Pontos por acerto</label>
@@ -76,6 +81,10 @@
               <label for="f-closes">Votação encerra em (opcional)</label>
               <input id="f-closes" type="datetime-local">
               <span class="hint">Sem data, a votação fica aberta até você encerrar.</span>
+            </div>
+            <div class="field" id="f-notify-field">
+              <label class="aopt"><input type="checkbox" id="f-notify" checked><span>Notificar os inscritos ao publicar esta enquete</span></label>
+              <span class="hint" id="f-notify-hint">Desmarque para publicar sem avisar ninguém.</span>
             </div>
             <p class="error" id="form-error" role="alert"></p>
             <div class="actions">
@@ -88,7 +97,10 @@
         <section>
           <div class="list-head">
             <h2 class="list-title" id="list-title">Enquetes</h2>
-            <button class="btn danger small" id="reset-ranking" type="button">Zerar ranking</button>
+            <div class="actions">
+              <button class="btn ghost small" id="reset-weekly" type="button">Zerar semanal</button>
+              <button class="btn danger small" id="reset-general" type="button">Zerar geral</button>
+            </div>
           </div>
           <div id="poll-list" class="alist"></div>
         </section>
@@ -145,7 +157,7 @@
       <div id="apane-ach" role="tabpanel" aria-labelledby="atab-ach" hidden>
       <section class="panel" id="ach-panel">
         <h2>Conquistas</h2>
-        <p class="hint">Níveis de emblema por total de pontos ou por sequência de acertos seguidos. Quem já desbloqueou mantém o emblema pra sempre, mesmo que você edite ou zere o ranking depois — só apagar o nível remove o emblema de quem tinha.</p>
+        <p class="hint">Níveis de emblema por total de pontos, sequência de acertos seguidos, total de erros ou sequência de erros seguidos (as duas últimas são as conquistas negativas). Quem já desbloqueou mantém o emblema pra sempre, mesmo que você edite ou zere o ranking depois — só apagar o nível remove o emblema de quem tinha. O botão Ocultar esconde o nível do site sem apagar nada: ao mostrar de novo, quem já tinha volta a ver o emblema.</p>
         <div class="admin-grid">
           <form id="ach-form">
             <input type="hidden" id="ach-id" value="">
@@ -159,6 +171,8 @@
                 <select id="ach-type">
                   <option value="points">Total de pontos</option>
                   <option value="streak">Sequência de acertos</option>
+                  <option value="misses">Total de erros (negativa)</option>
+                  <option value="missstreak">Sequência de erros (negativa)</option>
                 </select>
               </div>
               <div class="field">
@@ -191,7 +205,7 @@
       <div id="apane-backup" role="tabpanel" aria-labelledby="atab-backup" hidden>
       <section class="panel narrow-md">
         <h2>Backup dos dados</h2>
-        <p>Só backup nada demais!!</p>
+        <p>Apenas Backup Nada demais!!</p>
         <div class="actions">
           <button class="btn ghost" id="backup" type="button">Baixar backup</button>
         </div>
@@ -204,12 +218,12 @@
     <div class="dlg">
       <h2 id="reopen-title">Reabrir votação</h2>
       <p class="poll-name" id="reopen-name"></p>
-      <p>Esta enquete já tem resposta e soma pontos no ranking. O que fazer com esses pontos?</p>
+      <p id="reopen-desc">Esta enquete já tem resposta e soma pontos no ranking. O que fazer com esses pontos?</p>
       <div class="choices">
         <button class="btn" type="button" data-choice="keep">Manter os pontos</button>
-        <p class="hint">Os pontos continuam no ranking e os votos desta enquete são limpos, para valer como uma nova rodada.</p>
+        <p class="hint" id="reopen-hint-keep">Os pontos continuam no ranking e os votos desta enquete são limpos, para valer como uma nova rodada.</p>
         <button class="btn danger" type="button" data-choice="zero">Zerar os pontos desta enquete</button>
-        <p class="hint">Os pontos dela saem do ranking. Os votos são mantidos e os participantes podem trocá-los.</p>
+        <p class="hint" id="reopen-hint-zero">Os pontos dela saem do ranking. Os votos são mantidos e os participantes podem trocá-los.</p>
       </div>
       <button class="btn ghost" id="reopen-cancel" type="button">Cancelar</button>
     </div>
@@ -230,7 +244,12 @@
       </form>
     </div>
   </dialog>
+
   <div id="toast" role="status" aria-live="polite"></div>
+  <script src="/admin.js"></script>
+</body>
+</html>
+="toast" role="status" aria-live="polite"></div>
   <script src="/admin.js"></script>
 </body>
 </html>

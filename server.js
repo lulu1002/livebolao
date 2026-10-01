@@ -219,6 +219,12 @@ async function fetchVotes(pollIds) {
   return byPoll;
 }
 
+// Chave geral das notificações de enquete nova (ligada por padrão; só '0' desliga)
+async function getNotifyEnabled() {
+  const { rows } = await q("select value from settings where key = 'notify_enabled'");
+  return !(rows[0] && rows[0].value === '0');
+}
+
 async function getMode() {
   const { rows } = await q("select value from settings where key = 'mode'");
   return rows[0] && rows[0].value === 'accumulate' ? 'accumulate' : 'replace';
@@ -286,6 +292,17 @@ function adminPoll(p, votes) {
   };
 }
 
+const EPOCH = '1970-01-01T00:00:00.000Z'; // "desde sempre": nenhum reset ainda aconteceu
+
+/* Ranking geral e semanal são o MESMO histórico (votos + prêmios guardados),
+   só filtrado por uma data de corte diferente — zerar um dos dois só move
+   essa data pra "agora", sem apagar nada. */
+async function getResetAts() {
+  const { rows } = await q("select key, value from settings where key in ('weekly_reset_at', 'general_reset_at')");
+  const get = (k) => rows.find((x) => x.key === k)?.value || EPOCH;
+  return { weekly: get('weekly_reset_at'), general: get('general_reset_at') };
+}
+
 async function getStreakRule() {
   const { rows } = await q("select key, value from settings where key in ('streak_every', 'streak_bonus')");
   const get = (k) => {
@@ -304,8 +321,8 @@ async function getStreakRule() {
    zerado depois. Editar um nível existente atualiza como ele aparece pra quem já
    tem o emblema; apagar um nível remove o emblema de quem tinha (cascade). */
 async function fetchAchievementDefs() {
-  const { rows } = await q('select id, type, threshold, label, emoji, image_url from achievement_defs order by type, threshold');
-  return rows.map((r) => ({ id: r.id, type: r.type, threshold: r.threshold, label: r.label, emoji: r.emoji, imageUrl: r.image_url }));
+  const { rows } = await q("select id, type, threshold, label, emoji, image_url, active from achievement_defs order by array_position(array['points','streak','misses','missstreak'], type), threshold");
+  return rows.map((r) => ({ id: r.id, type: r.type, threshold: r.threshold, label: r.label, emoji: r.emoji, imageUrl: r.image_url, active: r.active }));
 }
 const nextTier = (defsOfType, current) => {
   const next = defsOfType.find((t) => t.threshold > current);
@@ -319,11 +336,15 @@ const nextTier = (defsOfType, current) => {
 async function syncAchievements(list, defs) {
   const pointDefs = defs.filter((d) => d.type === 'points');
   const streakDefs = defs.filter((d) => d.type === 'streak');
+  const missDefs = defs.filter((d) => d.type === 'misses');
+  const missStreakDefs = defs.filter((d) => d.type === 'missstreak');
   const userIds = [];
   const defIds = [];
   for (const s of list) {
     for (const t of pointDefs) if (s.points >= t.threshold) { userIds.push(s.userId); defIds.push(t.id); }
     for (const t of streakDefs) if (s.bestStreak >= t.threshold) { userIds.push(s.userId); defIds.push(t.id); }
+    for (const t of missDefs) if (s.misses >= t.threshold) { userIds.push(s.userId); defIds.push(t.id); }
+    for (const t of missStreakDefs) if (s.bestMissStreak >= t.threshold) { userIds.push(s.userId); defIds.push(t.id); }
   }
   if (userIds.length) {
     await q(
@@ -344,7 +365,10 @@ async function syncAchievements(list, defs) {
     if (!byUser.has(r.user_id)) byUser.set(r.user_id, []);
     byUser.get(r.user_id).push({ ...meta, unlockedAt: iso(r.unlocked_at) });
   }
-  for (const arr of byUser.values()) arr.sort((a, b) => a.threshold - b.threshold);
+  const typeOrder = ['points', 'streak', 'misses', 'missstreak'];
+  for (const arr of byUser.values()) {
+    arr.sort((a, b) => typeOrder.indexOf(a.type) - typeOrder.indexOf(b.type) || a.threshold - b.threshold);
+  }
   return byUser;
 }
 
@@ -354,24 +378,31 @@ async function syncAchievements(list, defs) {
    "Zerar ranking" limpa as duas. Os resultados são lidos em ordem cronológica
    para calcular a sequência de acertos e o bônus (se ativado). */
 async function computeStandings() {
+  const { general: generalResetAt } = await getResetAts();
   const [users, results, rounds, rule, achDefs] = await Promise.all([
     q('select id, display_name, login, avatar_url, is_house from users'),
-    q(`
-      select r.user_id, r.poll_title, r.chosen, r.correct, r.points, r.hit, r.at
-      from (
-        select v.user_id, p.title as poll_title, oc.label as chosen, cc.label as correct,
-               p.points, (v.option_id = p.correct_option_id) as hit, p.resolved_at as at
-        from votes v
-        join polls p on p.id = v.poll_id
-        left join poll_options oc on oc.id = v.option_id
-        left join poll_options cc on cc.id = p.correct_option_id
-        where p.correct_option_id is not null and p.counted
-        union all
-        select user_id, poll_title, null, null, points, hit, resolved_at from awards
-      ) r
-      order by r.at nulls first, r.poll_title`),
-    q(`select ((select count(*) from polls where correct_option_id is not null and counted)
-             + (select count(distinct poll_id) from awards))::int as n`),
+    q(
+      `select r.user_id, r.poll_title, r.chosen, r.correct, r.points, r.hit, r.at
+       from (
+         select v.user_id, p.title as poll_title, oc.label as chosen, cc.label as correct,
+                p.points, (v.option_id = p.correct_option_id) as hit, p.resolved_at as at
+         from votes v
+         join polls p on p.id = v.poll_id
+         left join poll_options oc on oc.id = v.option_id
+         left join poll_options cc on cc.id = p.correct_option_id
+         where p.correct_option_id is not null and p.counted and p.resolved_at > $1
+         union all
+         select user_id, poll_title, null, null, points, hit, resolved_at from awards
+         where resolved_at is null or resolved_at > $1
+       ) r
+       order by r.at nulls first, r.poll_title`,
+      [generalResetAt]
+    ),
+    q(
+      `select ((select count(*) from polls where correct_option_id is not null and counted and resolved_at > $1)
+              + (select count(distinct poll_id) from awards where resolved_at is null or resolved_at > $1))::int as n`,
+      [generalResetAt]
+    ),
     getStreakRule(),
     fetchAchievementDefs(),
   ]);
@@ -387,6 +418,9 @@ async function computeStandings() {
     played: 0,
     streak: 0,
     bestStreak: 0,
+    misses: 0,
+    missStreak: 0,
+    bestMissStreak: 0,
     bonus: 0,
     history: [],
   }]));
@@ -400,6 +434,7 @@ async function computeStandings() {
       s.hits += 1;
       s.points += r.points;
       s.streak += 1;
+      s.missStreak = 0;
       s.bestStreak = Math.max(s.bestStreak, s.streak);
       if (rule.every > 0 && s.streak % rule.every === 0) {
         bonus = rule.bonus;
@@ -408,6 +443,9 @@ async function computeStandings() {
       }
     } else {
       s.streak = 0;
+      s.misses += 1;
+      s.missStreak += 1;
+      s.bestMissStreak = Math.max(s.bestMissStreak, s.missStreak);
     }
     s.history.push({
       title: r.poll_title,
@@ -432,22 +470,73 @@ async function computeStandings() {
 
   const achByUser = await syncAchievements(list, achDefs);
   for (const s of list) {
-    const achs = achByUser.get(s.userId) || [];
+    const achs = (achByUser.get(s.userId) || []).filter((a) => a.active); // níveis ocultos não aparecem
     s.achievements = achs;
     const topOf = (type) => {
       const of = achs.filter((a) => a.type === type);
       return of.length ? of[of.length - 1] : null; // já vem ordenado do menor pro maior nível
     };
-    s.badges = { points: topOf('points'), streak: topOf('streak') };
+    s.badges = { points: topOf('points'), streak: topOf('streak'), misses: topOf('misses'), missstreak: topOf('missstreak') };
   }
 
   return {
     ranking: list,
     resolved: rounds.rows[0].n,
     rule,
-    pointTiers: achDefs.filter((d) => d.type === 'points'),
-    streakTiers: achDefs.filter((d) => d.type === 'streak'),
+    pointTiers: achDefs.filter((d) => d.active && d.type === 'points'),
+    streakTiers: achDefs.filter((d) => d.active && d.type === 'streak'),
+    resetAt: generalResetAt,
   };
+}
+
+/* Ranking semanal: mesmos dados do geral, só que cortados por uma data mais
+   recente. Não tem emblema, sequência nem histórico — é só o placar da semana. */
+async function computeWeeklyStandings() {
+  const { weekly: weeklyResetAt } = await getResetAts();
+  const [users, totals] = await Promise.all([
+    q('select id, display_name, login, avatar_url, is_house from users'),
+    q(
+      `select r.user_id,
+              coalesce(sum(case when r.hit then r.points else 0 end), 0)::int as points,
+              (count(*) filter (where r.hit))::int as hits,
+              count(*)::int as played
+       from (
+         select v.user_id, (v.option_id = p.correct_option_id) as hit, p.points
+         from votes v
+         join polls p on p.id = v.poll_id
+         where p.correct_option_id is not null and p.counted and p.resolved_at > $1
+         union all
+         select user_id, hit, points from awards
+         where resolved_at is null or resolved_at > $1
+       ) r
+       group by r.user_id`,
+      [weeklyResetAt]
+    ),
+  ]);
+
+  const byUser = new Map(totals.rows.map((r) => [r.user_id, r]));
+  const list = users.rows.map((u) => {
+    const t = byUser.get(u.id);
+    return {
+      userId: u.id,
+      name: u.display_name,
+      login: u.login,
+      avatar: u.avatar_url,
+      isHouse: u.is_house,
+      points: t ? t.points : 0,
+      hits: t ? t.hits : 0,
+      played: t ? t.played : 0,
+    };
+  });
+  list.sort((a, b) => b.points - a.points || b.hits - a.hits || a.name.localeCompare(b.name, 'pt-BR'));
+  let pos = 0;
+  let prev = null;
+  list.forEach((s, i) => {
+    if (!prev || s.points !== prev.points || s.hits !== prev.hits) pos = i + 1;
+    s.position = pos;
+    prev = s;
+  });
+  return { ranking: list, resetAt: weeklyResetAt };
 }
 
 function parsePollInput(body, requireOptions) {
@@ -473,7 +562,7 @@ function parsePollInput(body, requireOptions) {
   if (requireOptions) {
     const raw = Array.isArray(body?.options) ? body.options : [];
     const options = [...new Set(raw.map((o) => String(o).trim()).filter(Boolean))];
-    if (options.length < 2 || options.length > 10) return { error: 'Informe de 2 a 10 opções diferentes.' };
+    if (options.length < 1 || options.length > 10) return { error: 'Informe de 1 a 10 opções diferentes.' };
     if (options.some((o) => o.length > 100)) return { error: 'Cada opção pode ter no máximo 100 caracteres.' };
     out.options = options.map((text) => ({ id: uid(), text }));
   }
@@ -742,17 +831,24 @@ app.get('/api/ranking', wrap(async (req, res) => {
     ranking: st.ranking.map(({ history, ...row }) => row),
     resolved: st.resolved,
     rule: st.rule,
+    resetAt: st.resetAt,
   });
+}));
+
+app.get('/api/ranking/weekly', wrap(async (req, res) => {
+  res.json(await computeWeeklyStandings());
 }));
 
 /* Perfil público: só mostra enquetes já resolvidas, então não revela palpites em aberto */
 app.get('/api/users/:id/profile', wrap(async (req, res) => {
-  const st = await computeStandings();
+  const [st, wk] = await Promise.all([computeStandings(), computeWeeklyStandings()]);
   const found = st.ranking.find((r) => r.userId === req.params.id);
   if (!found) return res.status(404).json({ error: 'Participante não encontrado.' });
+  const weekly = wk.ranking.find((r) => r.userId === req.params.id);
   const { history, ...stats } = found;
   res.json({
     ...stats,
+    weekly: { position: weekly ? weekly.position : null, points: weekly ? weekly.points : 0 },
     accuracy: stats.played ? Math.round((stats.hits / stats.played) * 100) : 0,
     rule: st.rule,
     nextPoints: nextTier(st.pointTiers, stats.points),
@@ -791,6 +887,8 @@ app.get('/api/admin/polls', requireAdmin, wrap(async (req, res) => {
     users: users.rows[0].n,
     mode: await getMode(),
     streak: await getStreakRule(),
+    notify: await getNotifyEnabled(),
+    pushEnabled: PUSH_ENABLED,
   });
 }));
 
@@ -816,7 +914,11 @@ app.post('/api/admin/polls', requireAdmin, wrap(async (req, res) => {
       await c.query('insert into poll_options (id, poll_id, label, position) values ($1, $2, $3, $4)', [o.id, id, o.text, i]);
     }
   });
-  notifyNewPoll(input.title).catch((e) => console.error('Notificação push falhou:', e.message));
+  // Só notifica se a chave geral estiver ligada E esta enquete não tiver sido publicada "sem avisar"
+  const wantsNotify = req.body?.notify !== false;
+  if (wantsNotify && (await getNotifyEnabled())) {
+    notifyNewPoll(input.title).catch((e) => console.error('Notificação push falhou:', e.message));
+  }
   res.status(201).json({ id });
 }));
 
@@ -983,38 +1085,66 @@ app.post('/api/admin/polls/:id/visibility', requireAdmin, wrap(async (req, res) 
   res.json({ ok: true });
 }));
 
+/* Excluir enquete. Se ela já tem resposta e soma pontos, o admin escolhe antes:
+   - "keep": os pontos ficam guardados no ranking mesmo depois de apagada;
+   - "zero": os pontos dela não entram no ranking. */
 app.delete('/api/admin/polls/:id', requireAdmin, wrap(async (req, res) => {
-  const found = await tx(async (c) => {
-    const exists = await c.query('select 1 from polls where id = $1 for update', [req.params.id]);
-    if (!exists.rowCount) return false;
-    // Se a enquete já tinha resposta, os pontos ficam guardados no ranking.
-    await c.query(
-      `insert into awards (poll_id, poll_title, user_id, hit, points, resolved_at)
-       select p.id, p.title, v.user_id, (v.option_id = p.correct_option_id), p.points, p.resolved_at
-       from polls p join votes v on v.poll_id = p.id
-       where p.id = $1 and p.correct_option_id is not null and p.counted`,
-      [req.params.id]
-    );
+  const choice = req.body?.points;
+  const result = await tx(async (c) => {
+    const { rows } = await c.query('select correct_option_id, counted from polls where id = $1 for update', [req.params.id]);
+    if (!rows.length) return 'notfound';
+    const scoring = Boolean(rows[0].correct_option_id) && rows[0].counted;
+    if (scoring && choice !== 'keep' && choice !== 'zero') return 'choose';
+    if (scoring && choice === 'keep') {
+      await c.query(
+        `insert into awards (poll_id, poll_title, user_id, hit, points, resolved_at)
+         select p.id, p.title, v.user_id, (v.option_id = p.correct_option_id), p.points, p.resolved_at
+         from polls p join votes v on v.poll_id = p.id
+         where p.id = $1`,
+        [req.params.id]
+      );
+    }
+    // "zero": não grava nada em awards, então os pontos dela não valem mais nada
     await c.query('delete from polls where id = $1', [req.params.id]);
-    return true;
+    return 'ok';
   });
-  if (!found) return notFound(res);
+  if (result === 'notfound') return notFound(res);
+  if (result === 'choose') return res.status(400).json({ error: 'Escolha o que fazer com os pontos desta enquete.' });
   res.json({ ok: true });
 }));
 
-/* Zerar ranking: apaga os pontos guardados e desconta as enquetes já resolvidas */
-app.post('/api/admin/ranking/reset', requireAdmin, wrap(async (req, res) => {
-  await tx(async (c) => {
-    await c.query('delete from awards');
-    await c.query('update polls set counted = false');
-  });
+/* Zerar ranking: não apaga nada, só move a "data de corte" pra agora — tudo
+   antes dela para de contar. Semanal mexe só na data semanal; geral mexe nas
+   duas (já que o semanal é uma janela dentro do geral). Emblemas já
+   desbloqueados nunca somem, mesmo depois de qualquer um dos dois. */
+async function setResetAt(key, value) {
+  await q(
+    'insert into settings (key, value) values ($1, $2) on conflict (key) do update set value = excluded.value',
+    [key, value]
+  );
+}
+
+app.post('/api/admin/ranking/reset-weekly', requireAdmin, wrap(async (req, res) => {
+  await setResetAt('weekly_reset_at', new Date().toISOString());
+  res.json({ ok: true });
+}));
+
+app.post('/api/admin/ranking/reset-general', requireAdmin, wrap(async (req, res) => {
+  const now = new Date().toISOString();
+  await setResetAt('general_reset_at', now);
+  await setResetAt('weekly_reset_at', now);
   res.json({ ok: true });
 }));
 
 app.post('/api/admin/settings', requireAdmin, wrap(async (req, res) => {
-  const { mode, streakEvery, streakBonus } = req.body || {};
+  const { mode, streakEvery, streakBonus, notify } = req.body || {};
   const entries = [];
   let rankingChanged = false;
+
+  if (notify !== undefined) {
+    if (typeof notify !== 'boolean') return res.status(400).json({ error: 'Valor de notificação inválido.' });
+    entries.push(['notify_enabled', notify ? '1' : '0']);
+  }
 
   if (mode !== undefined) {
     if (mode !== 'replace' && mode !== 'accumulate') return res.status(400).json({ error: 'Modo inválido.' });
@@ -1048,7 +1178,7 @@ app.get('/api/admin/achievements', requireAdmin, wrap(async (req, res) => {
 
 function parseAchievementInput(body) {
   const type = body?.type;
-  if (type !== 'points' && type !== 'streak') return { error: 'Tipo inválido: use pontos ou sequência.' };
+  if (!['points', 'streak', 'misses', 'missstreak'].includes(type)) return { error: 'Tipo de conquista inválido.' };
   const threshold = Number(body?.threshold);
   if (!Number.isInteger(threshold) || threshold < 1 || threshold > 100000) {
     return { error: 'A meta precisa ser um número inteiro maior que 0.' };
@@ -1070,8 +1200,8 @@ app.post('/api/admin/achievements', requireAdmin, wrap(async (req, res) => {
   if (input.error) return res.status(400).json({ error: input.error });
   const id = uid();
   await q(
-    'insert into achievement_defs (id, type, threshold, label, emoji, image_url) values ($1, $2, $3, $4, $5, $6)',
-    [id, input.type, input.threshold, input.label, input.emoji, input.imageUrl]
+    'insert into achievement_defs (id, type, threshold, label, emoji, image_url, active) values ($1, $2, $3, $4, $5, $6, $7)',
+    [id, input.type, input.threshold, input.label, input.emoji, input.imageUrl, !['misses', 'missstreak'].includes(input.type)]
   );
   broadcast();
   res.status(201).json({ id });
@@ -1084,6 +1214,14 @@ app.put('/api/admin/achievements/:id', requireAdmin, wrap(async (req, res) => {
     'update achievement_defs set type = $2, threshold = $3, label = $4, emoji = $5, image_url = $6 where id = $1',
     [req.params.id, input.type, input.threshold, input.label, input.emoji, input.imageUrl]
   );
+  if (!r.rowCount) return res.status(404).json({ error: 'Nível não encontrado.' });
+  broadcast();
+  res.json({ ok: true });
+}));
+
+app.post('/api/admin/achievements/:id/active', requireAdmin, wrap(async (req, res) => {
+  if (typeof req.body?.active !== 'boolean') return res.status(400).json({ error: 'Informe active como true ou false.' });
+  const r = await q('update achievement_defs set active = $2 where id = $1', [req.params.id, req.body.active]);
   if (!r.rowCount) return res.status(404).json({ error: 'Nível não encontrado.' });
   broadcast();
   res.json({ ok: true });

@@ -63,7 +63,7 @@ create index if not exists awards_user_idx on awards(user_id);
 -- limpeza quando um nível é apagado (feita à parte, no servidor).
 create table if not exists achievement_defs (
   id         text primary key,
-  type       text not null check (type in ('points', 'streak')),
+  type       text not null check (type in ('points', 'streak', 'misses', 'missstreak')),
   threshold  integer not null check (threshold > 0),
   label      text not null,
   emoji      text not null default '🏆',
@@ -84,6 +84,40 @@ select * from (values
   ('streak_10', 'streak', 10, 'Lendário', '👑')
 ) as seed(id, type, threshold, label, emoji)
 where not exists (select 1 from achievement_defs);
+
+-- Liga/desliga a exibição do nível para os participantes (o desbloqueio continua
+-- sendo registrado por baixo; ao reativar, quem já tinha volta a ver o emblema).
+alter table achievement_defs add column if not exists active boolean not null default true;
+
+-- Conquistas negativas: 'misses' = total de enquetes erradas, 'missstreak' = erros
+-- seguidos. Bancos antigos têm a constraint só com points/streak, então ela é recriada.
+alter table achievement_defs drop constraint if exists achievement_defs_type_check;
+alter table achievement_defs add constraint achievement_defs_type_check
+  check (type in ('points', 'streak', 'misses', 'missstreak'));
+
+-- Níveis negativos padrão, semeados uma única vez (a flag em settings impede de
+-- voltarem depois que o admin editar ou apagar).
+-- Nascem ocultas (active = false): o admin liga uma a uma no painel quando quiser.
+insert into achievement_defs (id, type, threshold, label, emoji, active)
+select * from (values
+  ('missstreak_3', 'missstreak', 3, 'Pé frio', '🥶', false),
+  ('missstreak_5', 'missstreak', 5, 'Maré de azar', '🌧️', false),
+  ('missstreak_10', 'missstreak', 10, 'Maldição', '💀', false),
+  ('misses_10', 'misses', 10, 'Chutador', '🎲', false),
+  ('misses_25', 'misses', 25, 'Anti-vidente', '🔮', false),
+  ('misses_50', 'misses', 50, 'Mestre do erro', '🤡', false)
+) as seed(id, type, threshold, label, emoji, active)
+where not exists (select 1 from settings where key = 'neg_achievements_seeded');
+insert into settings (key, value) values ('neg_achievements_seeded', '1')
+on conflict (key) do nothing;
+
+-- Migração única: bancos que já tinham as negativas visíveis passam a ocultá-las.
+-- A flag garante que isso roda só uma vez; depois, o que o admin ligar fica ligado.
+update achievement_defs set active = false
+where type in ('misses', 'missstreak')
+  and not exists (select 1 from settings where key = 'neg_achievements_hidden_default');
+insert into settings (key, value) values ('neg_achievements_hidden_default', '1')
+on conflict (key) do nothing;
 
 -- Emblemas desbloqueados por participante. Nunca é apagado (nem ao zerar o
 -- ranking): uma vez conquistado, o emblema fica para sempre, a não ser que o
@@ -108,6 +142,12 @@ create table if not exists push_subscriptions (
   auth       text not null,
   created_at timestamptz not null default now()
 );
+
+-- Datas de corte do ranking geral e semanal. Por padrão ficam em 1970 (ou
+-- seja, "desde sempre" — nada foi zerado ainda); o servidor só move essas
+-- datas pra "agora" quando o admin aperta um dos botões de zerar.
+insert into settings (key, value) values ('weekly_reset_at', '1970-01-01T00:00:00.000Z') on conflict (key) do nothing;
+insert into settings (key, value) values ('general_reset_at', '1970-01-01T00:00:00.000Z') on conflict (key) do nothing;
 
 create table if not exists sessions (
   token_hash text primary key,

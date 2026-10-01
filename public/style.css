@@ -316,6 +316,22 @@ input:disabled, textarea:disabled { background: rgba(255, 255, 255, 0.5); color:
   .body h2 { font-size: 1.6rem; }
 }
 
+/* ---------- Sub-abas (Geral / Semanal) ---------- */
+.subtabs { display: flex; gap: 0.4rem; margin: 1rem 0 0; }
+.subtabs button {
+  padding: 0.4rem 0.9rem;
+  border: 2px solid var(--ink);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink);
+  font-weight: 700;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: transform 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+}
+.subtabs button[aria-selected="true"] { background: var(--ink); color: var(--ticket); }
+.subtabs button:hover { transform: scale(1.05); }
+
 /* ---------- Ranking ---------- */
 .rank {
   margin: 1rem 0 0;
@@ -380,14 +396,15 @@ dialog::backdrop { background: rgba(20, 35, 122, 0.55); }
 .profile-head h2 { font-size: 2.2rem; overflow-wrap: anywhere; }
 .stats {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: 1fr 1fr;
   margin: 1.25rem 0 0;
   border: 2px solid var(--ink);
   border-radius: 4px;
   background: var(--ticket);
 }
 .stat { padding: 0.9rem 1rem; border-left: 2px dashed var(--ink); }
-.stat:first-child { border-left: 0; }
+.stat:nth-child(odd) { border-left: 0; }
+.stat:nth-child(n + 3) { border-top: 2px dashed var(--ink); }
 .stat dt { font-size: 0.875rem; font-weight: 700; color: var(--ink-soft); }
 .stat dd { margin: 0; }
 .stat b { display: block; font-stretch: 62%; font-weight: 900; font-size: 2.4rem; line-height: 1; }
@@ -412,11 +429,6 @@ dialog::backdrop { background: rgba(20, 35, 122, 0.55); }
 }
 .hist li:first-child { border-top: 0; }
 .hist-res { display: flex; flex-wrap: wrap; gap: 0.35rem; }
-@media (max-width: 640px) {
-  .stats { grid-template-columns: 1fr 1fr; }
-  .stat:nth-child(3) { border-left: 0; }
-  .stat:nth-child(n + 3) { border-top: 2px dashed var(--ink); }
-}
 
 /* ---------- Conquistas ---------- */
 .achs {
@@ -436,6 +448,7 @@ dialog::backdrop { background: rgba(20, 35, 122, 0.55); }
   border-radius: 4px;
   background: var(--ticket);
 }
+.ach.neg { border-color: var(--miss); border-style: dashed; }
 .ach-icon { flex: none; font-size: 1.6rem; line-height: 1; }
 .ach-icon.img { width: 2rem; height: 2rem; border-radius: 4px; object-fit: cover; }
 

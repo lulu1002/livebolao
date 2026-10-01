@@ -12,6 +12,7 @@
     ranking: null,
     rankError: null,
     view: 'polls',
+    rankingPeriod: 'weekly',
     profileId: null,
     profile: null,
     profileError: null,
@@ -156,7 +157,7 @@
 
   function badgesEl(badges) {
     if (!badges) return null;
-    const chips = ['points', 'streak'].map((t) => badges[t]).filter(Boolean)
+    const chips = ['points', 'streak', 'misses', 'missstreak'].map((t) => badges[t]).filter(Boolean)
       .map((b) => h('span', { class: 'badge', title: b.label }, badgeIcon(b)));
     return chips.length ? h('span', { class: 'badges' }, chips) : null;
   }
@@ -167,7 +168,7 @@
     if (url) {
       return h('img', { class: cls, src: url, alt: '', width: '36', height: '36', loading: 'lazy', referrerpolicy: 'no-referrer' });
     }
-    if (isHouse) return h('span', { class: `${cls} ph house`, 'aria-hidden': 'true' }, '');
+    if (isHouse) return h('span', { class: `${cls} ph house`, 'aria-hidden': 'true' }, '🏠');
     return h('span', { class: `${cls} ph`, 'aria-hidden': 'true' }, (name || '?').slice(0, 1).toUpperCase());
   }
 
@@ -327,13 +328,26 @@
   /* ---------- Ranking ---------- */
   async function loadRanking() {
     try {
-      state.ranking = await api('/api/ranking');
+      const path = state.rankingPeriod === 'weekly' ? '/api/ranking/weekly' : '/api/ranking';
+      state.ranking = await api(path);
       state.rankError = null;
     } catch (e) {
       state.rankError = e.message;
     }
     renderRanking();
   }
+
+  function setRankingPeriod(period) {
+    if (state.rankingPeriod === period) return;
+    state.rankingPeriod = period;
+    $('#rtab-general').setAttribute('aria-selected', String(period === 'general'));
+    $('#rtab-weekly').setAttribute('aria-selected', String(period === 'weekly'));
+    state.ranking = null;
+    renderRanking();
+    loadRanking();
+  }
+  $('#rtab-general').addEventListener('click', () => setRankingPeriod('general'));
+  $('#rtab-weekly').addEventListener('click', () => setRankingPeriod('weekly'));
 
   function renderRanking() {
     const box = $('#ranking');
@@ -353,8 +367,11 @@
       box.append(h('div', { class: 'empty' }, h('p', {}, 'Ninguém entrou no bolão ainda. Entre com a Twitch e faça o primeiro palpite.')));
       return;
     }
-    if (!r.resolved) {
+    if (state.rankingPeriod === 'general' && !r.resolved) {
       box.append(h('p', { class: 'note' }, 'Os pontos aparecem quando o admin definir a primeira resposta certa.'));
+    }
+    if (r.resetAt && r.resetAt > '1970-01-02') {
+      box.append(h('p', { class: 'note' }, `Desde ${fmtDate(r.resetAt)}.`));
     }
     box.append(h('ol', { class: 'rank' }, r.ranking.map((s) => {
       const me = state.user && state.user.id === s.userId;
@@ -366,7 +383,7 @@
         avatarEl(s.name, s.avatar, '', s.isHouse),
         h('span', {},
           h('span', { class: 'nm-row' },
-            h('a', { class: 'nm', href: `#perfil/${s.userId}` }, (s.isHouse ? ' ' : '') + s.name + (me ? ' (você)' : '')),
+            h('a', { class: 'nm', href: `#perfil/${s.userId}` }, (s.isHouse ? '' : '') + s.name + (me ? ' (você)' : '')),
             badgesEl(s.badges)),
           h('span', { class: 'hits' }, s.isHouse ? 'Conta da casa' : hits)),
         h('span', { class: 'score' }, h('b', {}, s.points), ' pts'));
@@ -428,8 +445,10 @@
             ? h('span', { class: 'hits' }, 'Conta da casa — entra quando nenhuma opção bate')
             : h('a', { class: 'linkish', href: `https://www.twitch.tv/${encodeURIComponent(p.login)}`, target: '_blank', rel: 'noopener noreferrer' }, 'Canal na Twitch'))),
       h('dl', { class: 'stats' },
-        stat('Posição', `${p.position}º`),
-        stat('Pontos', p.points),
+        stat('Posição semanal', p.weekly ? `${p.weekly.position}º` : '—'),
+        stat('Posição geral', `${p.position}º`),
+        stat('Pontos semanais', p.weekly ? p.weekly.points : 0),
+        stat('Pontos gerais', p.points),
         stat('Acertos', `${p.hits}/${p.played}`, p.played ? `${p.accuracy}% de aproveitamento` : ''),
         stat('Sequência', p.streak, `melhor: ${p.bestStreak}`)));
     if (p.rule.every > 0) {
@@ -438,9 +457,14 @@
         (p.bonus ? ` Já rendeu ${p.bonus} pontos.` : '')));
     }
 
+    if (p.misses) {
+      box.append(h('p', { class: 'note' },
+        `Erros: ${p.misses} · pior sequência de erros: ${p.bestMissStreak}.`));
+    }
+
     box.append(h('h3', { class: 'section-title' }, 'Conquistas'));
     if (p.achievements.length) {
-      box.append(h('ul', { class: 'achs' }, p.achievements.map((a) => h('li', { class: 'ach' },
+      box.append(h('ul', { class: 'achs' }, p.achievements.map((a) => h('li', { class: 'ach' + (a.type === 'misses' || a.type === 'missstreak' ? ' neg' : '') },
         a.imageUrl
           ? h('img', { class: 'ach-icon img', src: a.imageUrl, alt: '' })
           : h('span', { class: 'ach-icon' }, a.emoji),
@@ -547,3 +571,4 @@
   }
   init();
 })();
+)();
