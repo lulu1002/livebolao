@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: bolao
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Senha do painel /admin. O Render gera uma; veja em Environment.
+      - key: ADMIN_PASSWORD
+        generateValue: true
+      # Connection string do Supabase (Session pooler). Você informa ao criar o Blueprint.
+      - key: DATABASE_URL
+        sync: false
+      # Credenciais do app criado em dev.twitch.tv/console
+      - key: TWITCH_CLIENT_ID
+        sync: false
+      - key: TWITCH_CLIENT_SECRET
+        sync: false
+      # Notificações push (opcional). Gere com: npx web-push generate-vapid-keys
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+      - key: VAPID_SUBJECT
+        value: mailto:seu-email@exemplo.com
