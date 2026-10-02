@@ -3,7 +3,7 @@
 Enquetes com palpites e ranking. O admin publica a enquete, os participantes entram com a Twitch e votam, e no final o admin define a resposta certa: quem acertou soma pontos.
 
 - Site: `/` (enquetes e ranking, atualiza sozinho)
-- Painel admin: `/admin` (protegido por `ADMIN_PASSWORD`), organizado em abas — Enquetes, Casa, Bônus, Conquistas, Backup — responsivo tanto no celular quanto no PC
+- Painel admin: `/admin` por padrão, ou o endereço que você definir em `ADMIN_PATH` (protegido por `ADMIN_PASSWORD`), organizado em abas — Enquetes, Casa, Bônus, Conquistas, Backup — responsivo tanto no celular quanto no PC
 - Stack: Node.js + Express + Postgres (Supabase), frontend em HTML/CSS/JS puro
 - No ranking aparece o nome e a foto da conta Twitch de cada participante
 
@@ -51,7 +51,7 @@ Abra http://localhost:3000.
 1. Suba a pasta para um repositório no GitHub.
 2. No Render: **New > Blueprint** e escolha o repositório (usa o `render.yaml`). Ele pede `DATABASE_URL`, `TWITCH_CLIENT_ID` e `TWITCH_CLIENT_SECRET`.
 3. Confira `ADMIN_PASSWORD` em **Environment** (o Blueprint gera uma).
-4. Acesse `https://SEU-APP.onrender.com/admin`.
+4. Acesse `https://SEU-APP.onrender.com/admin`. Para esconder o painel, defina a variável `ADMIN_PATH` (ex.: `painel-x7k2q9`) em Environment e acesse `https://SEU-APP.onrender.com/painel-x7k2q9`; o endereço `/admin` deixa de existir. Isso só dificulta achar o painel — a proteção de verdade continua sendo a `ADMIN_PASSWORD`.
 
 Se o redirecionamento do login der erro, defina `PUBLIC_URL=https://SEU-APP.onrender.com` (sem barra no final) e confira se a URL de callback na Twitch é exatamente a mesma.
 
@@ -72,5 +72,10 @@ Se o redirecionamento do login der erro, defina `PUBLIC_URL=https://SEU-APP.onre
 - **Perfil do participante:** clique em um nome no ranking (ou no seu nome no topo). Mostra posição, pontos, acertos, aproveitamento, sequência atual e melhor sequência, e o histórico de palpites já resolvidos. Palpites em aberto nunca aparecem.
 - **Bônus de sequência** (painel admin, desligado por padrão): a cada N acertos seguidos a pessoa ganha +B pontos. Só contam enquetes em que ela votou, e um erro zera a sequência. A regra é recalculada em todo o ranking na hora.
 - **Conquistas:** níveis de emblema por total de pontos ou por sequência de acertos seguidos, além de **conquistas negativas** por total de erros ou por sequência de erros seguidos, com nome, emoji e imagem (link https, opcional — sem imagem, usa o emoji) totalmente editáveis no painel `/admin`, seção "Conquistas". Uma vez desbloqueado, o emblema fica para sempre no perfil, mesmo depois de zerar o ranking — editar um nível atualiza como ele aparece em quem já tem; apagar um nível remove o emblema de quem tinha. Vem com sete níveis padrão na primeira vez que o servidor sobe (Bronze/Prata/Ouro/Platina por pontos, três por sequência) e seis negativos (Pé frio 3 erros seguidos, Maré de azar 5, Maldição 10, Chutador 10 erros, Anti-vidente 25, Mestre do erro 50 — semeados uma vez, inclusive em bancos que já existiam), que você pode editar, apagar ou complementar à vontade depois. As conquistas negativas já vêm **ocultas** por padrão (inclusive as que o admin criar depois; ligue no botão Mostrar), e as positivas vêm visíveis. Cada nível tem um botão **Ocultar/Mostrar** no painel: oculto, ele some do ranking e dos perfis (e do "faltam X para..."), mas o desbloqueio continua sendo registrado e volta a aparecer ao reativar. Os dois mais altos aparecem ao lado do nome no ranking.
-- **Notificações:** botão de sino no topo. No painel admin há uma chave geral (liga/desliga) e, no formulário de nova enquete, uma caixa "Notificar ao publicar" para publicar sem avisar ninguém — só notifica se as duas estiverem ligadas. Avisa todo mundo inscrito quando uma enquete é publicada (não avisa em edição, encerramento ou resultado). As inscrições mortas são limpas sozinhas na próxima tentativa de envio.
+- **Notificações:** botão de sino no topo. No painel admin há uma chave geral (liga/desliga) e, no formulário de nova enquete, uma caixa "Notificar ao publicar" para publicar sem avisar ninguém — só notifica se as duas estiverem ligadas. Avisa todo mundo inscrito quando uma enquete é publicada. Além disso, quem estava logado ao ativar o sino recebe **"você acertou +N pontos"** (ou "dessa vez não deu") quando você define a resposta, e quem ainda não votou recebe um **lembrete cerca de 1 hora antes** da enquete fechar (confere a cada minuto, só com o servidor acordado). Cada tipo tem uma chave liga/desliga no painel admin (aba Enquetes) (não avisa em edição, encerramento ou resultado). As inscrições mortas são limpas sozinhas na próxima tentativa de envio.
 - A página principal atualiza sozinha (sem F5) quando o admin publica uma enquete, encerra ou define a resposta.
+
+
+## Hall da fama
+
+Ao clicar em **Zerar semanal** (ou **Zerar geral**, que zera o semanal junto), o servidor grava o pódio da semana — 1º ao 3º lugar, com pontos e acertos — antes de mover a data de corte. Empatados dividem o lugar, contas da casa e quem não pontuou ficam de fora, e semana em que ninguém pontuou não grava nada. O histórico aparece na aba **Hall da fama** do ranking e no perfil de cada pessoa, e nenhum "zerar" apaga o hall. No painel admin (aba 🏆 Hall) dá para **mostrar/ocultar** o hall para os participantes e excluir uma semana gravada por engano. A conquista **Campeão semanal** (tipo "Títulos semanais", níveis 1, 3 e 5 por padrão, editáveis em Conquistas) conta as vezes em 1º lugar. O pódio só começa a ser gravado a partir do primeiro "Zerar" depois deste deploy.

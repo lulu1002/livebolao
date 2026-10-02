@@ -9,7 +9,10 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-      # Senha do painel /admin. O Render gera uma; veja em Environment.
+      # Endereço do painel admin (sem a barra). Escolha um nome que só você sabe; vazio = "admin".
+      - key: ADMIN_PATH
+        sync: false
+      # Senha do painel admin. O Render gera uma; veja em Environment.
       - key: ADMIN_PASSWORD
         generateValue: true
       # Connection string do Supabase (Session pooler). Você informa ao criar o Blueprint.

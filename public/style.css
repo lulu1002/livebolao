@@ -329,6 +329,7 @@ input:disabled, textarea:disabled { background: rgba(255, 255, 255, 0.5); color:
   cursor: pointer;
   transition: transform 0.15s ease, background-color 0.15s ease, color 0.15s ease;
 }
+.subtabs button[hidden] { display: none; }
 .subtabs button[aria-selected="true"] { background: var(--ink); color: var(--ticket); }
 .subtabs button:hover { transform: scale(1.05); }
 

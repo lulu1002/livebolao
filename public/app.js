@@ -81,6 +81,21 @@
     btn.classList.toggle('is-on', on);
   }
 
+  // Liga a inscrição de notificações ao participante logado (e desliga ao sair), para
+  // o servidor avisar "você acertou" e "enquete fechando" só a quem interessa.
+  const pushUserKey = () => (state.user ? state.user.id : '');
+  async function syncPushUser() {
+    try {
+      if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+      if (localStorage.getItem('pushUser') === pushUserKey()) return; // já está em dia
+      const reg = await navigator.serviceWorker.getRegistration('/');
+      const sub = reg && (await reg.pushManager.getSubscription());
+      if (!sub) return;
+      await api('/api/push/subscribe', { method: 'POST', body: sub.toJSON() });
+      localStorage.setItem('pushUser', pushUserKey());
+    } catch (_) { /* silencioso: tenta de novo na próxima visita */ }
+  }
+
   async function toggleNotify() {
     const btn = $('#notify-toggle');
     btn.disabled = true;
@@ -88,6 +103,7 @@
       const existing = await currentSubscription();
       if (existing) {
         await api('/api/push/unsubscribe', { method: 'POST', body: { endpoint: existing.endpoint } }).catch(() => {});
+        try { localStorage.removeItem('pushUser'); } catch (_) { /* segue */ }
         await existing.unsubscribe();
         toast('Notificações desativadas');
       } else {
@@ -101,7 +117,8 @@
         const reg = await navigator.serviceWorker.ready;
         const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(publicKey) });
         await api('/api/push/subscribe', { method: 'POST', body: sub.toJSON() });
-        toast('Notificações ativadas. Você vai ser avisado quando abrir uma enquete nova.');
+        try { localStorage.setItem('pushUser', pushUserKey()); } catch (_) { /* segue */ }
+        toast('Notificações ativadas: enquete nova, resultado e lembrete de enquete fechando.');
       }
     } catch (e) {
       toast(e.message || 'Não foi possível mudar as notificações.', true);
@@ -139,6 +156,12 @@
   const fmtDate = (iso) =>
     new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 
+  const MEDAL = { 1: '🥇', 2: '🥈', 3: '🥉' };
+  function weekLabel(w) {
+    const day = (iso) => new Date(iso).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+    return w.startedAt > '1970-01-02' ? `${day(w.startedAt)} a ${day(w.endedAt)}` : `Até ${day(w.endedAt)}`;
+  }
+
   function xMark() {
     const svg = document.createElementNS(SVG_NS, 'svg');
     svg.setAttribute('viewBox', '0 0 24 24');
@@ -157,7 +180,7 @@
 
   function badgesEl(badges) {
     if (!badges) return null;
-    const chips = ['points', 'streak', 'misses', 'missstreak'].map((t) => badges[t]).filter(Boolean)
+    const chips = ['points', 'streak', 'titles', 'misses', 'missstreak'].map((t) => badges[t]).filter(Boolean)
       .map((b) => h('span', { class: 'badge', title: b.label }, badgeIcon(b)));
     return chips.length ? h('span', { class: 'badges' }, chips) : null;
   }
@@ -190,6 +213,7 @@
   async function logout() {
     try { await api('/api/logout', { method: 'POST' }); } catch (_) { /* segue */ }
     state.user = null;
+    syncPushUser();
     renderWho();
     refresh();
   }
@@ -326,7 +350,24 @@
   }
 
   /* ---------- Ranking ---------- */
+  async function loadHall() {
+    try {
+      state.hall = await api('/api/hall');
+      state.hallError = null;
+    } catch (e) {
+      state.hallError = e.message;
+    }
+    const visible = Boolean(state.hall && state.hall.visible);
+    $('#rtab-hall').hidden = !visible;
+    if (state.rankingPeriod === 'hall') {
+      if (state.hall && !visible) { setRankingPeriod('weekly'); return; } // o admin escondeu o hall
+      renderRanking();
+    }
+  }
+
   async function loadRanking() {
+    loadHall(); // também mostra/esconde a aba do hall
+    if (state.rankingPeriod === 'hall') return;
     try {
       const path = state.rankingPeriod === 'weekly' ? '/api/ranking/weekly' : '/api/ranking';
       state.ranking = await api(path);
@@ -340,18 +381,53 @@
   function setRankingPeriod(period) {
     if (state.rankingPeriod === period) return;
     state.rankingPeriod = period;
-    $('#rtab-general').setAttribute('aria-selected', String(period === 'general'));
-    $('#rtab-weekly').setAttribute('aria-selected', String(period === 'weekly'));
+    for (const p of ['weekly', 'general', 'hall']) $(`#rtab-${p}`).setAttribute('aria-selected', String(period === p));
     state.ranking = null;
     renderRanking();
     loadRanking();
   }
   $('#rtab-general').addEventListener('click', () => setRankingPeriod('general'));
   $('#rtab-weekly').addEventListener('click', () => setRankingPeriod('weekly'));
+  $('#rtab-hall').addEventListener('click', () => setRankingPeriod('hall'));
+
+  function renderHall(box) {
+    if (state.hallError) {
+      box.append(h('div', { class: 'empty' },
+        h('p', {}, state.hallError),
+        h('button', { class: 'btn', type: 'button', onclick: loadHall }, 'Tentar de novo')));
+      return;
+    }
+    const hall = state.hall;
+    if (!hall) {
+      box.append(h('p', { class: 'note' }, 'Carregando hall da fama…'));
+      return;
+    }
+    if (!hall.weeks.length) {
+      box.append(h('div', { class: 'empty' },
+        h('p', {}, 'Ainda não há campeões. O pódio de cada semana aparece aqui quando o ranking semanal é zerado.')));
+      return;
+    }
+    for (const w of hall.weeks) {
+      box.append(
+        h('h3', { class: 'section-title' }, weekLabel(w)),
+        h('ol', { class: 'rank' }, w.places.map((p) => {
+          const me = state.user && state.user.id === p.userId;
+          return h('li', { class: me ? 'me' : null },
+            h('span', { class: 'pos' }, MEDAL[p.place]),
+            avatarEl(p.name, p.avatar),
+            h('span', {},
+              h('span', { class: 'nm-row' },
+                h('a', { class: 'nm', href: `#perfil/${p.userId}` }, p.name + (me ? ' (você)' : ''))),
+              h('span', { class: 'hits' }, `${p.hits} ${p.hits === 1 ? 'acerto' : 'acertos'} na semana`)),
+            h('span', { class: 'score' }, h('b', {}, p.points), ' pts'));
+        })));
+    }
+  }
 
   function renderRanking() {
     const box = $('#ranking');
     box.replaceChildren();
+    if (state.rankingPeriod === 'hall') { renderHall(box); return; }
     if (state.rankError) {
       box.append(h('div', { class: 'empty' },
         h('p', {}, state.rankError),
@@ -462,6 +538,19 @@
         `Erros: ${p.misses} · pior sequência de erros: ${p.bestMissStreak}.`));
     }
 
+    if (p.hall && p.hall.podiums) {
+      box.append(
+        h('h3', { class: 'section-title' }, 'Hall da fama'),
+        h('p', { class: 'note' },
+          `🏆 ${p.hall.titles} ${p.hall.titles === 1 ? 'título semanal' : 'títulos semanais'} · ` +
+          `${p.hall.podiums} ${p.hall.podiums === 1 ? 'pódio' : 'pódios'}.`),
+        h('ol', { class: 'hist' }, p.hall.weeks.map((w) => h('li', {},
+          h('div', {},
+            h('span', { class: 'nm' }, `${MEDAL[w.place]} ${w.place}º lugar`),
+            h('span', { class: 'hits' }, weekLabel(w))),
+          h('div', { class: 'hist-res' }, h('span', { class: 'pill hit' }, `${w.points} pts`))))));
+    }
+
     box.append(h('h3', { class: 'section-title' }, 'Conquistas'));
     if (p.achievements.length) {
       box.append(h('ul', { class: 'achs' }, p.achievements.map((a) => h('li', { class: 'ach' + (a.type === 'misses' || a.type === 'missstreak' ? ' neg' : '') },
@@ -560,6 +649,7 @@
       const me = await api('/api/me');
       state.user = me.user;
     } catch (_) { /* segue como visitante */ }
+    syncPushUser();
     renderWho();
     route();
     loadPolls();

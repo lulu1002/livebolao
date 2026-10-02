@@ -2,7 +2,7 @@
   'use strict';
 
   const $ = (sel, root = document) => root.querySelector(sel);
-  const state = { polls: [], users: 0, editing: null, mode: 'replace', streak: { every: 0, bonus: 0 }, notify: true, pushEnabled: true, house: [], houseEditing: null, achievements: [], achEditing: null };
+  const state = { polls: [], users: 0, editing: null, mode: 'replace', streak: { every: 0, bonus: 0 }, notify: true, notifyResult: true, notifyClosing: true, hallVisible: true, hall: [], pushEnabled: true, house: [], houseEditing: null, achievements: [], achEditing: null };
 
   /* ---------- Utilidades ---------- */
   function h(tag, attrs = {}, ...children) {
@@ -77,7 +77,7 @@
     $('#admin-pass').focus();
   }
 
-  const ADMIN_TABS = ['polls', 'house', 'streak', 'ach', 'backup'];
+  const ADMIN_TABS = ['polls', 'house', 'streak', 'ach', 'hall', 'backup'];
 
   function setAdminTab(tab) {
     if (!ADMIN_TABS.includes(tab)) tab = 'polls';
@@ -123,6 +123,9 @@
       state.mode = data.mode;
       state.streak = data.streak;
       state.notify = data.notify;
+      state.notifyResult = data.notifyResult;
+      state.notifyClosing = data.notifyClosing;
+      state.hallVisible = data.hallVisible;
       state.pushEnabled = data.pushEnabled;
       renderMode();
       renderNotify();
@@ -130,6 +133,7 @@
       renderList();
       loadHouse();
       loadAchievements();
+      loadHall();
     } catch (e) {
       handleError(e);
     }
@@ -377,33 +381,81 @@
     }
   });
 
-  /* ---------- Notificações: chave geral e caixa por enquete ---------- */
+  /* ---------- Notificações: chaves gerais e caixa por enquete ---------- */
   function renderNotify() {
-    const g = $('#notify-global');
-    g.checked = state.notify;
-    g.disabled = !state.pushEnabled;
-    $('#notify-global-hint').textContent = state.pushEnabled
-      ? 'Chave geral: desligada, nenhuma publicação envia notificação, mesmo com a caixa da enquete marcada.'
-      : 'As notificações push não estão configuradas neste servidor (faltam as chaves VAPID).';
+    const off = !state.pushEnabled;
+    for (const [id, key] of [['notify-global', 'notify'], ['notify-result', 'notifyResult'], ['notify-closing', 'notifyClosing']]) {
+      const el = $(`#${id}`);
+      el.checked = state[key];
+      el.disabled = off;
+    }
+    $('#notify-global-hint').textContent = off
+      ? 'As notificações push não estão configuradas neste servidor (faltam as chaves VAPID).'
+      : 'Chave geral: desligada, nenhuma publicação envia notificação, mesmo com a caixa da enquete marcada.';
     const f = $('#f-notify');
-    f.disabled = !state.pushEnabled || !state.notify;
-    $('#f-notify-hint').textContent = !state.pushEnabled || !state.notify
-      ? 'Desativado: as notificações estão desligadas na chave geral acima.'
+    f.disabled = off || !state.notify;
+    $('#f-notify-hint').textContent = off || !state.notify
+      ? 'Desativado: as notificações de enquete nova estão desligadas na chave geral acima.'
       : 'Desmarque para publicar sem avisar ninguém.';
   }
 
-  $('#notify-global').addEventListener('change', async (e) => {
-    const value = e.target.checked;
+  // Liga um checkbox a uma chave do servidor (salva na hora, sem botão)
+  function bindFlag(selector, field, stateKey, onMsg, offMsg, after) {
+    $(selector).addEventListener('change', async (e) => {
+      const value = e.target.checked;
+      try {
+        await api('/api/admin/settings', { method: 'POST', body: { [field]: value } });
+        state[stateKey] = value;
+        toast(value ? onMsg : offMsg);
+      } catch (err) {
+        handleError(err);
+      } finally {
+        after();
+      }
+    });
+  }
+  bindFlag('#notify-global', 'notify', 'notify', 'Notificações de enquete nova ligadas', 'Notificações de enquete nova desligadas', renderNotify);
+  bindFlag('#notify-result', 'notifyResult', 'notifyResult', 'Aviso de resultado ligado', 'Aviso de resultado desligado', renderNotify);
+  bindFlag('#notify-closing', 'notifyClosing', 'notifyClosing', 'Lembrete de enquete fechando ligado', 'Lembrete de enquete fechando desligado', renderNotify);
+
+  /* ---------- Hall da fama ---------- */
+  const medal = { 1: '🥇', 2: '🥈', 3: '🥉' };
+  const dayBR = (iso) => new Date(iso).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+
+  async function loadHall() {
     try {
-      await api('/api/admin/settings', { method: 'POST', body: { notify: value } });
-      state.notify = value;
-      renderNotify();
-      toast(value ? 'Notificações de enquete nova ligadas' : 'Notificações de enquete nova desligadas');
-    } catch (err) {
-      renderNotify();
-      handleError(err);
+      const data = await api('/api/admin/hall');
+      state.hall = data.weeks;
+      state.hallVisible = data.visible;
+      renderHall();
+    } catch (e) {
+      handleError(e);
     }
-  });
+  }
+
+  function renderHall() {
+    $('#hall-visible').checked = state.hallVisible;
+    const box = $('#hall-list');
+    box.replaceChildren();
+    if (!state.hall.length) {
+      box.append(h('p', { class: 'hint' }, 'Nenhuma semana registrada ainda. O primeiro pódio é gravado quando você zerar o ranking semanal.'));
+      return;
+    }
+    box.append(...state.hall.map((w) => {
+      const range = w.startedAt > '1970-01-02' ? `${dayBR(w.startedAt)} a ${dayBR(w.endedAt)}` : `Até ${dayBR(w.endedAt)}`;
+      const podium = w.places.map((p) => `${medal[p.place]} ${p.name} (${p.points})`).join(' · ');
+      return h('div', { class: 'house-row' },
+        h('span', { class: 'nm' }, `${range} — ${podium}`),
+        h('button', { class: 'btn danger small', type: 'button', onclick: () => removeHallWeek(w, range) }, 'Excluir'));
+    }));
+  }
+
+  function removeHallWeek(w, range) {
+    if (!confirm(`Excluir a semana ${range} do Hall da fama? Quem ganhou título nela perde a contagem, mas emblemas já desbloqueados continuam com a pessoa (apague o nível em Conquistas para removê-los).`)) return;
+    act(() => api(`/api/admin/hall/${w.id}`, { method: 'DELETE' }), 'Semana removida do Hall da fama');
+  }
+
+  bindFlag('#hall-visible', 'hallVisible', 'hallVisible', 'Hall da fama visível para os participantes', 'Hall da fama escondido dos participantes', renderHall);
 
   /* ---------- Modo substituir/acumular e zerar ranking ---------- */
   function renderMode() {
@@ -421,14 +473,39 @@
     }
   }));
 
-  $('#reset-weekly').addEventListener('click', () => {
-    if (!confirm('Zerar o ranking semanal? Os pontos desta semana voltam pra 0, mas o ranking geral continua igual.')) return;
-    act(() => api('/api/admin/ranking/reset-weekly', { method: 'POST' }), 'Ranking semanal zerado');
+  // Quem seria o campeão se zerasse agora (mesma regra do servidor: sem conta da casa, só quem pontuou)
+  async function weeklyPreview() {
+    try {
+      const wk = await api('/api/ranking/weekly');
+      const eligible = wk.ranking.filter((r) => !r.isHouse && r.points > 0);
+      if (!eligible.length) return 'Ninguém pontuou nesta semana, então nenhum campeão será registrado no Hall da fama.';
+      const best = eligible.filter((r) => r.points === eligible[0].points && r.hits === eligible[0].hits);
+      return `Campeão desta semana: ${best.map((r) => r.name).join(' e ')} (${best[0].points} pts). O pódio será gravado no Hall da fama.`;
+    } catch (_) {
+      return 'O pódio da semana será gravado no Hall da fama.';
+    }
+  }
+
+  async function resetRanking(path, doneMsg) {
+    try {
+      const r = await api(path, { method: 'POST' });
+      toast(r.podium && r.podium.length ? `${doneMsg} Pódio gravado no Hall da fama.` : `${doneMsg} Ninguém pontuou, então nada foi gravado no hall.`);
+      await loadPolls();
+    } catch (e) {
+      handleError(e);
+    }
+  }
+
+  $('#reset-weekly').addEventListener('click', async () => {
+    const preview = await weeklyPreview();
+    if (!confirm(`Zerar o ranking semanal?\n\n${preview}\n\nOs pontos desta semana voltam pra 0, mas o ranking geral continua igual.`)) return;
+    resetRanking('/api/admin/ranking/reset-weekly', 'Ranking semanal zerado.');
   });
 
-  $('#reset-general').addEventListener('click', () => {
-    if (!confirm('Zerar o ranking geral? Isso também zera o semanal junto. Os emblemas já conquistados continuam com quem tem, mas os pontos de todo mundo voltam pra 0. Considere baixar um backup antes.')) return;
-    act(() => api('/api/admin/ranking/reset-general', { method: 'POST' }), 'Ranking geral zerado');
+  $('#reset-general').addEventListener('click', async () => {
+    const preview = await weeklyPreview();
+    if (!confirm(`Zerar o ranking geral?\n\n${preview}\n\nIsso também zera o semanal junto. Os emblemas já conquistados continuam com quem tem, mas os pontos de todo mundo voltam pra 0. Considere baixar um backup antes.`)) return;
+    resetRanking('/api/admin/ranking/reset-general', 'Ranking geral zerado.');
   });
 
   /* ---------- Bônus de sequência ---------- */
@@ -561,7 +638,7 @@
       box.append(h('p', { class: 'hint' }, 'Nenhum nível cadastrado ainda.'));
       return;
     }
-    const typeLabel = { points: 'pontos', streak: 'acertos seguidos', misses: 'erros', missstreak: 'erros seguidos' };
+    const typeLabel = { points: 'pontos', streak: 'acertos seguidos', titles: 'títulos semanais', misses: 'erros', missstreak: 'erros seguidos' };
     box.append(...state.achievements.map((a) => h('div', { class: 'house-row', style: a.active ? '' : 'opacity: 0.55' },
       achIcon(a),
       h('span', { class: 'nm' }, `${a.label} — ${a.threshold} ${typeLabel[a.type]}${a.active ? '' : ' (oculta)'}`),

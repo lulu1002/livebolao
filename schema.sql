@@ -63,7 +63,7 @@ create index if not exists awards_user_idx on awards(user_id);
 -- limpeza quando um nível é apagado (feita à parte, no servidor).
 create table if not exists achievement_defs (
   id         text primary key,
-  type       text not null check (type in ('points', 'streak', 'misses', 'missstreak')),
+  type       text not null check (type in ('points', 'streak', 'misses', 'missstreak', 'titles')),
   threshold  integer not null check (threshold > 0),
   label      text not null,
   emoji      text not null default '🏆',
@@ -93,7 +93,7 @@ alter table achievement_defs add column if not exists active boolean not null de
 -- seguidos. Bancos antigos têm a constraint só com points/streak, então ela é recriada.
 alter table achievement_defs drop constraint if exists achievement_defs_type_check;
 alter table achievement_defs add constraint achievement_defs_type_check
-  check (type in ('points', 'streak', 'misses', 'missstreak'));
+  check (type in ('points', 'streak', 'misses', 'missstreak', 'titles'));
 
 -- Níveis negativos padrão, semeados uma única vez (a flag em settings impede de
 -- voltarem depois que o admin editar ou apagar).
@@ -119,6 +119,18 @@ where type in ('misses', 'missstreak')
 insert into settings (key, value) values ('neg_achievements_hidden_default', '1')
 on conflict (key) do nothing;
 
+-- Conquista "Campeão semanal" ('titles' = vezes em 1º lugar no ranking semanal).
+-- Semeada uma única vez, visível por padrão.
+insert into achievement_defs (id, type, threshold, label, emoji)
+select * from (values
+  ('titles_1', 'titles', 1, 'Campeão da semana', '🥇'),
+  ('titles_3', 'titles', 3, 'Tricampeão', '🏆'),
+  ('titles_5', 'titles', 5, 'Dinastia', '🏰')
+) as seed(id, type, threshold, label, emoji)
+where not exists (select 1 from settings where key = 'titles_achievements_seeded');
+insert into settings (key, value) values ('titles_achievements_seeded', '1')
+on conflict (key) do nothing;
+
 -- Emblemas desbloqueados por participante. Nunca é apagado (nem ao zerar o
 -- ranking): uma vez conquistado, o emblema fica para sempre, a não ser que o
 -- admin apague o nível em si (aí some pra todo mundo que tinha).
@@ -142,6 +154,30 @@ create table if not exists push_subscriptions (
   auth       text not null,
   created_at timestamptz not null default now()
 );
+
+-- Liga a inscrição de notificações ao participante (quando ele está logado), para
+-- avisar "você acertou" e "enquete fechando" só a quem interessa.
+alter table push_subscriptions add column if not exists user_id text references users(id) on delete set null;
+
+-- Marca enquetes que já tiveram o aviso de "fechando em breve".
+alter table polls add column if not exists closing_notified boolean not null default false;
+
+-- Hall da fama: pódio (1º ao 3º) de cada semana, gravado quando o admin zera o
+-- ranking semanal. Nunca é apagado por "zerar" — só pelo admin, semana a semana.
+create table if not exists hall_weeks (
+  id         text primary key,
+  started_at timestamptz not null,
+  ended_at   timestamptz not null
+);
+create table if not exists hall_places (
+  week_id text not null references hall_weeks(id) on delete cascade,
+  user_id text not null references users(id) on delete cascade,
+  place   integer not null check (place between 1 and 3),
+  points  integer not null,
+  hits    integer not null,
+  primary key (week_id, user_id)
+);
+create index if not exists hall_places_user_idx on hall_places(user_id);
 
 -- Datas de corte do ranking geral e semanal. Por padrão ficam em 1970 (ou
 -- seja, "desde sempre" — nada foi zerado ainda); o servidor só move essas
@@ -170,3 +206,5 @@ alter table achievements  enable row level security;
 alter table achievement_defs enable row level security;
 alter table sessions      enable row level security;
 alter table push_subscriptions enable row level security;
+alter table hall_weeks    enable row level security;
+alter table hall_places   enable row level security;

@@ -16,6 +16,13 @@ const DATABASE_URL = process.env.DATABASE_URL || '';
 const TWITCH_CLIENT_ID = process.env.TWITCH_CLIENT_ID || '';
 const TWITCH_CLIENT_SECRET = process.env.TWITCH_CLIENT_SECRET || '';
 const USER_SESSION_MS = 30 * 24 * 60 * 60 * 1000; // 30 dias
+// Endereço do painel admin. Padrão: /admin. Troque pela variável ADMIN_PATH (ex.: um nome
+// que só você sabe). Só letras, números, hífen e sublinhado.
+let ADMIN_PATH = String(process.env.ADMIN_PATH || 'admin').trim().replace(/^\/+|\/+$/g, '');
+if (!/^[A-Za-z0-9_-]{1,64}$/.test(ADMIN_PATH) || ['api', 'healthz'].includes(ADMIN_PATH.toLowerCase())) {
+  console.warn('[aviso] ADMIN_PATH inválido (use só letras, números, - e _). Usando "admin".');
+  ADMIN_PATH = 'admin';
+}
 const ADMIN_SESSION_MS = 12 * 60 * 60 * 1000; // 12 horas
 const TWITCH_AVATAR_PREFIX = 'https://static-cdn.jtvnw.net/';
 
@@ -219,11 +226,12 @@ async function fetchVotes(pollIds) {
   return byPoll;
 }
 
-// Chave geral das notificações de enquete nova (ligada por padrão; só '0' desliga)
-async function getNotifyEnabled() {
-  const { rows } = await q("select value from settings where key = 'notify_enabled'");
+// Chaves liga/desliga guardadas em settings: ligadas por padrão, só '0' desliga.
+async function getFlag(key) {
+  const { rows } = await q('select value from settings where key = $1', [key]);
   return !(rows[0] && rows[0].value === '0');
 }
+const getNotifyEnabled = () => getFlag('notify_enabled'); // aviso de enquete nova
 
 async function getMode() {
   const { rows } = await q("select value from settings where key = 'mode'");
@@ -321,7 +329,7 @@ async function getStreakRule() {
    zerado depois. Editar um nível existente atualiza como ele aparece pra quem já
    tem o emblema; apagar um nível remove o emblema de quem tinha (cascade). */
 async function fetchAchievementDefs() {
-  const { rows } = await q("select id, type, threshold, label, emoji, image_url, active from achievement_defs order by array_position(array['points','streak','misses','missstreak'], type), threshold");
+  const { rows } = await q("select id, type, threshold, label, emoji, image_url, active from achievement_defs order by array_position(array['points','streak','titles','misses','missstreak'], type), threshold");
   return rows.map((r) => ({ id: r.id, type: r.type, threshold: r.threshold, label: r.label, emoji: r.emoji, imageUrl: r.image_url, active: r.active }));
 }
 const nextTier = (defsOfType, current) => {
@@ -336,6 +344,7 @@ const nextTier = (defsOfType, current) => {
 async function syncAchievements(list, defs) {
   const pointDefs = defs.filter((d) => d.type === 'points');
   const streakDefs = defs.filter((d) => d.type === 'streak');
+  const titleDefs = defs.filter((d) => d.type === 'titles');
   const missDefs = defs.filter((d) => d.type === 'misses');
   const missStreakDefs = defs.filter((d) => d.type === 'missstreak');
   const userIds = [];
@@ -343,6 +352,7 @@ async function syncAchievements(list, defs) {
   for (const s of list) {
     for (const t of pointDefs) if (s.points >= t.threshold) { userIds.push(s.userId); defIds.push(t.id); }
     for (const t of streakDefs) if (s.bestStreak >= t.threshold) { userIds.push(s.userId); defIds.push(t.id); }
+    for (const t of titleDefs) if (s.titles >= t.threshold) { userIds.push(s.userId); defIds.push(t.id); }
     for (const t of missDefs) if (s.misses >= t.threshold) { userIds.push(s.userId); defIds.push(t.id); }
     for (const t of missStreakDefs) if (s.bestMissStreak >= t.threshold) { userIds.push(s.userId); defIds.push(t.id); }
   }
@@ -365,7 +375,7 @@ async function syncAchievements(list, defs) {
     if (!byUser.has(r.user_id)) byUser.set(r.user_id, []);
     byUser.get(r.user_id).push({ ...meta, unlockedAt: iso(r.unlocked_at) });
   }
-  const typeOrder = ['points', 'streak', 'misses', 'missstreak'];
+  const typeOrder = ['points', 'streak', 'titles', 'misses', 'missstreak'];
   for (const arr of byUser.values()) {
     arr.sort((a, b) => typeOrder.indexOf(a.type) - typeOrder.indexOf(b.type) || a.threshold - b.threshold);
   }
@@ -379,7 +389,7 @@ async function syncAchievements(list, defs) {
    para calcular a sequência de acertos e o bônus (se ativado). */
 async function computeStandings() {
   const { general: generalResetAt } = await getResetAts();
-  const [users, results, rounds, rule, achDefs] = await Promise.all([
+  const [users, results, rounds, rule, achDefs, titleRows] = await Promise.all([
     q('select id, display_name, login, avatar_url, is_house from users'),
     q(
       `select r.user_id, r.poll_title, r.chosen, r.correct, r.points, r.hit, r.at
@@ -405,6 +415,7 @@ async function computeStandings() {
     ),
     getStreakRule(),
     fetchAchievementDefs(),
+    q('select user_id, count(*)::int as n from hall_places where place = 1 group by user_id'),
   ]);
 
   const stats = new Map(users.rows.map((u) => [u.id, {
@@ -421,9 +432,16 @@ async function computeStandings() {
     misses: 0,
     missStreak: 0,
     bestMissStreak: 0,
+    titles: 0,
     bonus: 0,
     history: [],
   }]));
+
+  // Títulos semanais vêm do hall da fama e não dependem das datas de "zerar"
+  for (const t of titleRows.rows) {
+    const s = stats.get(t.user_id);
+    if (s) s.titles = t.n;
+  }
 
   for (const r of results.rows) {
     const s = stats.get(r.user_id);
@@ -476,7 +494,7 @@ async function computeStandings() {
       const of = achs.filter((a) => a.type === type);
       return of.length ? of[of.length - 1] : null; // já vem ordenado do menor pro maior nível
     };
-    s.badges = { points: topOf('points'), streak: topOf('streak'), misses: topOf('misses'), missstreak: topOf('missstreak') };
+    s.badges = { points: topOf('points'), streak: topOf('streak'), titles: topOf('titles'), misses: topOf('misses'), missstreak: topOf('missstreak') };
   }
 
   return {
@@ -633,14 +651,16 @@ app.use('/api/admin', (req, res, next) => {
 
 /* Avisa quem se inscreveu quando uma enquete nova é publicada. Inscrições
    mortas (o navegador não existe mais) são removidas na hora. */
-async function notifyNewPoll(title) {
-  if (!PUSH_ENABLED) return;
-  const { rows } = await q('select endpoint, p256dh, auth from push_subscriptions');
-  if (!rows.length) return;
-  const payload = JSON.stringify({ title: 'Nova enquete no Bolão', body: title, url: '/' });
-  await Promise.all(rows.map(async (r) => {
+const short = (t, n = 80) => (t.length > n ? `${t.slice(0, n - 1)}…` : t);
+
+/* Envia um payload para uma lista de inscrições. Inscrições mortas (o navegador
+   não existe mais) são removidas na hora. */
+async function sendPush(subs, payload) {
+  if (!PUSH_ENABLED || !subs.length) return;
+  const body = JSON.stringify(payload);
+  await Promise.all(subs.map(async (r) => {
     try {
-      await webpush.sendNotification({ endpoint: r.endpoint, keys: { p256dh: r.p256dh, auth: r.auth } }, payload);
+      await webpush.sendNotification({ endpoint: r.endpoint, keys: { p256dh: r.p256dh, auth: r.auth } }, body);
     } catch (e) {
       if (e.statusCode === 404 || e.statusCode === 410) {
         await q('delete from push_subscriptions where endpoint = $1', [r.endpoint]).catch(() => {});
@@ -649,6 +669,59 @@ async function notifyNewPoll(title) {
       }
     }
   }));
+}
+
+async function notifyNewPoll(title) {
+  if (!PUSH_ENABLED) return;
+  const { rows } = await q('select endpoint, p256dh, auth from push_subscriptions');
+  await sendPush(rows, { title: 'Nova enquete no Bolão', body: short(title, 120), url: '/' });
+}
+
+/* Resultado: cada participante inscrito (e logado quando se inscreveu) que votou
+   na enquete recebe "acertou +N" ou "dessa vez não deu". */
+async function notifyPollResult(pollId) {
+  if (!PUSH_ENABLED || !(await getFlag('notify_result'))) return;
+  const { rows: pr } = await q('select title, points, correct_option_id from polls where id = $1', [pollId]);
+  const poll = pr[0];
+  if (!poll || !poll.correct_option_id) return;
+  const { rows } = await q(
+    `select s.endpoint, s.p256dh, s.auth, (v.option_id = $2) as hit
+     from votes v
+     join push_subscriptions s on s.user_id = v.user_id
+     join users u on u.id = v.user_id and not u.is_house
+     where v.poll_id = $1`,
+    [pollId, poll.correct_option_id]
+  );
+  const title = short(poll.title);
+  await sendPush(rows.filter((r) => r.hit), {
+    title: '🎯 Você acertou!', body: `+${poll.points} pontos em "${title}"`, url: '/#ranking',
+  });
+  await sendPush(rows.filter((r) => !r.hit), {
+    title: 'Resultado da enquete', body: `"${title}" já tem resposta. Dessa vez não deu.`, url: '/',
+  });
+}
+
+/* Lembrete: ~1h antes de fechar, avisa quem ainda não votou (e inscrições sem
+   participante ligado, que não dá pra saber). Cada enquete avisa uma vez só. */
+async function notifyClosingSoon() {
+  if (!PUSH_ENABLED || !(await getFlag('notify_closing'))) return;
+  const { rows: polls } = await q(
+    `update polls set closing_notified = true
+     where not closing_notified and visible and not closed and correct_option_id is null
+       and closes_at is not null and closes_at > now() and closes_at <= now() + interval '1 hour'
+     returning id, title, closes_at`
+  );
+  for (const p of polls) {
+    const { rows: subs } = await q(
+      `select s.endpoint, s.p256dh, s.auth from push_subscriptions s
+       where s.user_id is null
+          or not exists (select 1 from votes v where v.poll_id = $1 and v.user_id = s.user_id)`,
+      [p.id]
+    );
+    const mins = Math.max(1, Math.round((Date.parse(p.closes_at) - Date.now()) / 60000));
+    const when = mins >= 60 ? '1 hora' : `${mins} min`;
+    await sendPush(subs, { title: '⏰ Enquete fechando', body: `"${short(p.title)}" fecha em ${when}. Ainda dá tempo de votar!`, url: '/' });
+  }
 }
 
 const requireUser = wrap(async (req, res, next) => {
@@ -776,10 +849,11 @@ app.post('/api/push/subscribe', limit('push', 30, 60 * 60 * 1000), wrap(async (r
   if (!PUSH_ENABLED) return res.status(503).json({ error: 'Notificações push não estão configuradas neste servidor.' });
   if (!validSubscription(req.body)) return res.status(400).json({ error: 'Inscrição inválida.' });
   const { endpoint, keys } = req.body;
+  const u = await currentUser(req); // null se não estiver logado: a inscrição fica "anônima"
   await q(
-    `insert into push_subscriptions (endpoint, p256dh, auth) values ($1, $2, $3)
-     on conflict (endpoint) do update set p256dh = excluded.p256dh, auth = excluded.auth`,
-    [endpoint, keys.p256dh, keys.auth]
+    `insert into push_subscriptions (endpoint, p256dh, auth, user_id) values ($1, $2, $3, $4)
+     on conflict (endpoint) do update set p256dh = excluded.p256dh, auth = excluded.auth, user_id = excluded.user_id`,
+    [endpoint, keys.p256dh, keys.auth, u ? u.id : null]
   );
   res.status(201).json({ ok: true });
 }));
@@ -846,8 +920,23 @@ app.get('/api/users/:id/profile', wrap(async (req, res) => {
   if (!found) return res.status(404).json({ error: 'Participante não encontrado.' });
   const weekly = wk.ranking.find((r) => r.userId === req.params.id);
   const { history, ...stats } = found;
+  let hall = null;
+  if (await getFlag('hall_visible')) {
+    const { rows: hp } = await q(
+      `select w.started_at, w.ended_at, p.place, p.points
+       from hall_places p join hall_weeks w on w.id = p.week_id
+       where p.user_id = $1 order by w.ended_at desc`,
+      [req.params.id]
+    );
+    hall = {
+      titles: hp.filter((r) => r.place === 1).length,
+      podiums: hp.length,
+      weeks: hp.map((r) => ({ startedAt: iso(r.started_at), endedAt: iso(r.ended_at), place: r.place, points: r.points })),
+    };
+  }
   res.json({
     ...stats,
+    hall,
     weekly: { position: weekly ? weekly.position : null, points: weekly ? weekly.points : 0 },
     accuracy: stats.played ? Math.round((stats.hits / stats.played) * 100) : 0,
     rule: st.rule,
@@ -888,6 +977,9 @@ app.get('/api/admin/polls', requireAdmin, wrap(async (req, res) => {
     mode: await getMode(),
     streak: await getStreakRule(),
     notify: await getNotifyEnabled(),
+    notifyResult: await getFlag('notify_result'),
+    notifyClosing: await getFlag('notify_closing'),
+    hallVisible: await getFlag('hall_visible'),
     pushEnabled: PUSH_ENABLED,
   });
 }));
@@ -927,7 +1019,9 @@ const notFound = (res) => res.status(404).json({ error: 'Enquete não encontrada
 app.put('/api/admin/polls/:id', requireAdmin, wrap(async (req, res) => {
   const input = parsePollInput(req.body, false);
   if (input.error) return res.status(400).json({ error: input.error });
-  const r = await q('update polls set title = $2, description = $3, points = $4, closes_at = $5 where id = $1', [
+  const r = await q(`update polls set title = $2, description = $3, points = $4,
+      closing_notified = (closing_notified and closes_at is not distinct from $5::timestamptz), closes_at = $5
+    where id = $1`, [
     req.params.id,
     input.title,
     input.description,
@@ -1022,12 +1116,17 @@ app.post('/api/admin/polls/:id/resolve', requireAdmin, wrap(async (req, res) => 
     if (!valid) return res.status(400).json({ error: 'Opção inválida.' });
   }
 
+  const prev = await q('select correct_option_id from polls where id = $1', [req.params.id]);
   const r = await q(
     'update polls set correct_option_id = $2, counted = true, closed = true, resolved_at = now() where id = $1',
     [req.params.id, optionId]
   );
   if (!r.rowCount) return notFound(res);
   await computeStandings(); // grava na hora os emblemas desbloqueados com este resultado
+  // Só avisa na primeira vez que a enquete recebe resposta (corrigir a resposta não reenvia)
+  if (!prev.rows[0]?.correct_option_id) {
+    notifyPollResult(req.params.id).catch((e) => console.error('Notificação de resultado falhou:', e.message));
+  }
   res.json({ ok: true });
 }));
 
@@ -1124,26 +1223,121 @@ async function setResetAt(key, value) {
   );
 }
 
+/* Pódio da semana: top 3 por posição (empates dividem o lugar), sem contas da
+   casa e sem quem não pontuou. A lista já vem ordenada de computeWeeklyStandings. */
+function buildPodium(list) {
+  const eligible = list.filter((r) => !r.isHouse && r.points > 0);
+  const podium = [];
+  let pos = 0;
+  let prev = null;
+  eligible.forEach((r, i) => {
+    if (!prev || r.points !== prev.points || r.hits !== prev.hits) pos = i + 1;
+    prev = r;
+    if (pos <= 3) podium.push({ ...r, place: pos });
+  });
+  return podium;
+}
+
+/* Fecha a semana: grava o pódio no hall da fama (se alguém pontuou) e move as
+   datas de corte. Tudo numa transação, pra nunca zerar sem registrar. */
+async function closeWeek(extraResetKeys = []) {
+  const wk = await computeWeeklyStandings();
+  const podium = buildPodium(wk.ranking);
+  const now = new Date().toISOString();
+  await tx(async (c) => {
+    if (podium.length) {
+      const id = uid();
+      await c.query('insert into hall_weeks (id, started_at, ended_at) values ($1, $2, $3)', [id, wk.resetAt, now]);
+      for (const p of podium) {
+        await c.query(
+          'insert into hall_places (week_id, user_id, place, points, hits) values ($1, $2, $3, $4, $5)',
+          [id, p.userId, p.place, p.points, p.hits]
+        );
+      }
+    }
+    for (const key of ['weekly_reset_at', ...extraResetKeys]) {
+      await c.query(
+        'insert into settings (key, value) values ($1, $2) on conflict (key) do update set value = excluded.value',
+        [key, now]
+      );
+    }
+  });
+  await computeStandings().catch(() => {}); // grava na hora as conquistas de título
+  broadcast();
+  return podium;
+}
+
+const podiumView = (podium) => podium.map((p) => ({ name: p.name, place: p.place, points: p.points }));
+
 app.post('/api/admin/ranking/reset-weekly', requireAdmin, wrap(async (req, res) => {
-  await setResetAt('weekly_reset_at', new Date().toISOString());
-  res.json({ ok: true });
+  res.json({ ok: true, podium: podiumView(await closeWeek()) });
 }));
 
 app.post('/api/admin/ranking/reset-general', requireAdmin, wrap(async (req, res) => {
-  const now = new Date().toISOString();
-  await setResetAt('general_reset_at', now);
-  await setResetAt('weekly_reset_at', now);
+  res.json({ ok: true, podium: podiumView(await closeWeek(['general_reset_at'])) });
+}));
+
+/* ---------- Hall da fama ---------- */
+async function fetchHall() {
+  const { rows } = await q(
+    `select w.id, w.started_at, w.ended_at, p.place, p.points, p.hits,
+            u.id as user_id, u.display_name, u.login, u.avatar_url
+     from hall_weeks w
+     join hall_places p on p.week_id = w.id
+     join users u on u.id = p.user_id
+     order by w.ended_at desc, p.place, u.display_name`
+  );
+  const weeks = [];
+  const byId = new Map();
+  for (const r of rows) {
+    let w = byId.get(r.id);
+    if (!w) {
+      w = { id: r.id, startedAt: iso(r.started_at), endedAt: iso(r.ended_at), places: [] };
+      byId.set(r.id, w);
+      weeks.push(w);
+    }
+    w.places.push({
+      place: r.place, userId: r.user_id, name: r.display_name, login: r.login,
+      avatar: r.avatar_url, points: r.points, hits: r.hits,
+    });
+  }
+  return weeks.slice(0, 100);
+}
+
+app.get('/api/hall', wrap(async (req, res) => {
+  if (!(await getFlag('hall_visible'))) return res.json({ visible: false, weeks: [] });
+  res.json({ visible: true, weeks: await fetchHall() });
+}));
+
+app.get('/api/admin/hall', requireAdmin, wrap(async (req, res) => {
+  res.json({ visible: await getFlag('hall_visible'), weeks: await fetchHall() });
+}));
+
+app.delete('/api/admin/hall/:id', requireAdmin, wrap(async (req, res) => {
+  const r = await q('delete from hall_weeks where id = $1', [req.params.id]);
+  if (!r.rowCount) return res.status(404).json({ error: 'Semana não encontrada.' });
+  broadcast();
   res.json({ ok: true });
 }));
 
 app.post('/api/admin/settings', requireAdmin, wrap(async (req, res) => {
-  const { mode, streakEvery, streakBonus, notify } = req.body || {};
+  const { mode, streakEvery, streakBonus } = req.body || {};
   const entries = [];
   let rankingChanged = false;
 
-  if (notify !== undefined) {
-    if (typeof notify !== 'boolean') return res.status(400).json({ error: 'Valor de notificação inválido.' });
-    entries.push(['notify_enabled', notify ? '1' : '0']);
+  // Chaves liga/desliga (campo da API -> chave em settings)
+  const flagFields = {
+    notify: 'notify_enabled',
+    notifyResult: 'notify_result',
+    notifyClosing: 'notify_closing',
+    hallVisible: 'hall_visible',
+  };
+  for (const [field, key] of Object.entries(flagFields)) {
+    const v = req.body?.[field];
+    if (v === undefined) continue;
+    if (typeof v !== 'boolean') return res.status(400).json({ error: 'Valor inválido.' });
+    entries.push([key, v ? '1' : '0']);
+    if (field === 'hallVisible') rankingChanged = true; // avisa as páginas abertas
   }
 
   if (mode !== undefined) {
@@ -1178,7 +1372,7 @@ app.get('/api/admin/achievements', requireAdmin, wrap(async (req, res) => {
 
 function parseAchievementInput(body) {
   const type = body?.type;
-  if (!['points', 'streak', 'misses', 'missstreak'].includes(type)) return { error: 'Tipo de conquista inválido.' };
+  if (!['points', 'streak', 'titles', 'misses', 'missstreak'].includes(type)) return { error: 'Tipo de conquista inválido.' };
   const threshold = Number(body?.threshold);
   if (!Number.isInteger(threshold) || threshold < 1 || threshold > 100000) {
     return { error: 'A meta precisa ser um número inteiro maior que 0.' };
@@ -1259,9 +1453,19 @@ app.get('/api/admin/backup', requireAdmin, wrap(async (req, res) => {
 }));
 
 /* ---------- Páginas e arquivos estáticos ---------- */
-app.get('/admin', (req, res) => {
+// A página e o script do admin ficam fora de /public: só existem sob o endereço secreto.
+const ADMIN_HTML = fs
+  .readFileSync(path.join(__dirname, 'admin', 'admin.html'), 'utf8')
+  .replaceAll('%ADMIN_PATH%', `/${ADMIN_PATH}`);
+app.get(`/${ADMIN_PATH}`, (req, res) => {
   res.setHeader('X-Robots-Tag', 'noindex, nofollow');
-  res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+  res.setHeader('Cache-Control', 'no-store');
+  res.type('html').send(ADMIN_HTML);
+});
+app.get(`/${ADMIN_PATH}/admin.js`, (req, res) => {
+  res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+  res.setHeader('Cache-Control', 'no-store');
+  res.sendFile(path.join(__dirname, 'admin', 'admin.js'));
 });
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -1286,6 +1490,11 @@ app.use((err, req, res, next) => {
     process.exit(1);
   }
   const server = app.listen(PORT, '0.0.0.0', () => console.log(`Bolão rodando na porta ${PORT}`));
+
+  // Lembrete de "enquete fechando": confere a cada minuto (só roda enquanto o servidor está acordado)
+  setInterval(() => {
+    notifyClosingSoon().catch((e) => console.error('Lembrete de enquete falhou:', e.message));
+  }, 60 * 1000).unref();
 
   const shutdown = () => {
     server.close();
