@@ -76,6 +76,32 @@ Se o redirecionamento do login der erro, defina `PUBLIC_URL=https://SEU-APP.onre
 - A página principal atualiza sozinha (sem F5) quando o admin publica uma enquete, encerra ou define a resposta.
 
 
+## Tópicos das enquetes
+
+As enquetes são divididas em **tópicos** (vêm dois: Geral e Casa), que viram divisórias na página principal, igual ao Semanal/Geral do ranking. No painel admin:
+
+- **✏️ Criar:** aba só com o formulário. Ao clicar em Publicar, abre uma caixa perguntando em qual tópico a enquete entra (com um só tópico, publica direto).
+- **Enquetes:** uma sub-aba por tópico, com o botão **Mover de tópico** em cada enquete. Em **Gerenciar tópicos** você cria, renomeia e apaga tópicos (só dá para apagar um vazio; sempre fica pelo menos um).
+- Editar uma enquete abre o formulário na aba Criar e volta para a lista ao salvar.
+
+No site, a barra de tópicos só aparece quando há enquetes em mais de um tópico, e mostra quantas estão abertas em cada um. Os pontos continuam no mesmo ranking, independente do tópico. No modo "substituir", publicar uma enquete só tira da página as anteriores **do mesmo tópico**. As enquetes que já existiam ficam em Geral.
+
 ## Hall da fama
 
 Ao clicar em **Zerar semanal** (ou **Zerar geral**, que zera o semanal junto), o servidor grava o pódio da semana — 1º ao 3º lugar, com pontos e acertos — antes de mover a data de corte. Empatados dividem o lugar, contas da casa e quem não pontuou ficam de fora, e semana em que ninguém pontuou não grava nada. O histórico aparece na aba **Hall da fama** do ranking e no perfil de cada pessoa, e nenhum "zerar" apaga o hall. No painel admin (aba 🏆 Hall) dá para **mostrar/ocultar** o hall para os participantes e excluir uma semana gravada por engano. A conquista **Campeão semanal** (tipo "Títulos semanais", níveis 1, 3 e 5 por padrão, editáveis em Conquistas) conta as vezes em 1º lugar. O pódio só começa a ser gravado a partir do primeiro "Zerar" depois deste deploy.
+
+
+## Prêmios únicos
+
+Na aba **🏅 Prêmio** do painel você cria prêmios com nome, emoji ou imagem (link https) e uma pontuação do **ranking geral**. Cada prêmio tem um só dono: quem cruzar a pontuação primeiro leva (empate no mesmo resultado: quem tinha mais pontos), e quem chegar depois não ganha. Contas da casa e banidos não disputam. Se já houver gente acima da pontuação ao criar o prêmio, ele vai para quem chegou primeiro. Quando alguém conquista um prêmio, os inscritos recebem uma notificação com o **nome da pessoa e o do prêmio** (chave liga/desliga na própria aba Prêmio, ligada por padrão; dispara uma vez só por conquista, inclusive quando o prêmio é entregue ao criar ou liberar). O dono aparece com o prêmio ao lado do nome no ranking geral e no perfil, e a aba **Prêmios** do ranking mostra a vitrine (com dono, disponível ou sem dono).
+
+**Remover do dono** deixa o prêmio sem dono até você clicar em **Liberar de novo**; quem perdeu o prêmio nunca o ganha de volta. Ao liberar, ele vai para quem chegou primeiro entre os demais (se já houver alguém acima da pontuação, é entregue na hora).
+
+## Usuários (pontos e banimento)
+
+Na aba **👥 Usuários**: busque alguém e use **± Pontos** para somar ou subtrair (com motivo opcional e lista de ajustes com **Desfazer**). O ajuste conta como pontos ganhos naquele momento, no ranking geral e no semanal, e some do ranking que for zerado depois. **Banir** desconecta a pessoa, impede de entrar e votar e a esconde dos rankings, do hall e do perfil; os votos ficam guardados e **Desbanir** devolve tudo. Contas da casa ficam fora desta lista.
+
+
+## Tema claro/escuro
+
+O botão 🌙/☀️ no topo do site (e do painel admin) alterna entre o tema claro e o escuro. Na primeira visita o tema segue o do aparelho; depois que a pessoa clica, a escolha fica salva naquele navegador (`localStorage`, chave `theme`) e vale para o site e para o admin. O arquivo `public/theme.js` aplica o tema antes da página aparecer, para não piscar. As cores dos dois temas ficam nas variáveis do começo de `public/style.css` (`:root` e `:root[data-theme="dark"]`): para ajustar uma cor do escuro, mude só ali.

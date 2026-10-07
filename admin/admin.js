@@ -2,7 +2,7 @@
   'use strict';
 
   const $ = (sel, root = document) => root.querySelector(sel);
-  const state = { polls: [], users: 0, editing: null, mode: 'replace', streak: { every: 0, bonus: 0 }, notify: true, notifyResult: true, notifyClosing: true, hallVisible: true, hall: [], pushEnabled: true, house: [], houseEditing: null, achievements: [], achEditing: null };
+  const state = { notifyPrize: true, prizes: [], prizeEditing: null, adminUsers: [], polls: [], topics: [], topicTab: null, users: 0, editing: null, mode: 'replace', streak: { every: 0, bonus: 0 }, notify: true, notifyResult: true, notifyClosing: true, hallVisible: true, hall: [], pushEnabled: true, house: [], houseEditing: null, achievements: [], achEditing: null };
 
   /* ---------- Utilidades ---------- */
   function h(tag, attrs = {}, ...children) {
@@ -77,7 +77,7 @@
     $('#admin-pass').focus();
   }
 
-  const ADMIN_TABS = ['polls', 'house', 'streak', 'ach', 'hall', 'backup'];
+  const ADMIN_TABS = ['create', 'polls', 'house', 'streak', 'ach', 'prizes', 'hall', 'users', 'backup'];
 
   function setAdminTab(tab) {
     if (!ADMIN_TABS.includes(tab)) tab = 'polls';
@@ -86,6 +86,9 @@
       $(`#atab-${t}`).setAttribute('aria-selected', String(t === tab));
     });
     history.replaceState(null, '', tab === 'polls' ? location.pathname : `#${tab}`);
+    // Estas abas carregam só quando abertas (a lista de usuários é a mais pesada)
+    if (tab === 'prizes') loadPrizes();
+    if (tab === 'users') loadUsers();
   }
   ADMIN_TABS.forEach((t) => $(`#atab-${t}`).addEventListener('click', () => setAdminTab(t)));
 
@@ -119,6 +122,7 @@
     try {
       const data = await api('/api/admin/polls');
       state.polls = data.polls;
+      state.topics = data.topics || [];
       state.users = data.users;
       state.mode = data.mode;
       state.streak = data.streak;
@@ -130,6 +134,7 @@
       renderMode();
       renderNotify();
       renderStreak();
+      renderTopics();
       renderList();
       loadHouse();
       loadAchievements();
@@ -193,20 +198,87 @@
           : h('button', { class: 'btn ghost', type: 'button', onclick: () => reopen(p) }, 'Reabrir votação'),
         h('button', { class: 'btn ghost', type: 'button', onclick: () => act(() => api(`/api/admin/polls/${p.id}/visibility`, { method: 'POST', body: { visible: !p.visible } }), p.visible ? 'Enquete ocultada da página' : 'Enquete de volta na página') },
           p.visible ? 'Ocultar da página' : 'Mostrar na página'),
+        h('button', { class: 'btn ghost', type: 'button', onclick: () => moveTopic(p) }, 'Mover de tópico'),
         h('button', { class: 'btn ghost', type: 'button', onclick: () => startEdit(p) }, 'Editar'),
         h('button', { class: 'btn danger', type: 'button', onclick: () => remove(p) }, 'Excluir')));
     return article;
   }
 
+  /* ---------- Tópicos ---------- */
+  const firstTopicId = () => (state.topics[0] ? state.topics[0].id : null);
+  // Enquete sem tópico válido cai no primeiro tópico
+  const pollTopicId = (p) => (state.topics.some((t) => t.id === p.topicId) ? p.topicId : firstTopicId());
+  const selectedTopicId = () => (state.topics.some((t) => t.id === state.topicTab) ? state.topicTab : firstTopicId());
+
+  function renderTopics() {
+    const sel = selectedTopicId();
+    $('#topic-tabs').replaceChildren(...state.topics.map((t) => h('button', {
+      type: 'button', role: 'tab', 'aria-selected': String(t.id === sel),
+      onclick: () => { state.topicTab = t.id; renderTopics(); renderList(); },
+    }, `${t.name} (${state.polls.filter((p) => pollTopicId(p) === t.id).length})`)));
+
+    $('#topic-list').replaceChildren(...state.topics.map((t) => h('div', { class: 'house-row' },
+      h('span', { class: 'nm' }, `${t.name} · ${t.polls} ${t.polls === 1 ? 'enquete' : 'enquetes'}`),
+      h('button', { class: 'btn ghost small', type: 'button', onclick: () => renameTopic(t) }, 'Renomear'),
+      h('button', { class: 'btn danger small', type: 'button', onclick: () => removeTopic(t) }, 'Excluir'))));
+  }
+
+  function renameTopic(t) {
+    const name = prompt('Novo nome do tópico:', t.name);
+    if (name === null || name.trim() === '' || name.trim() === t.name) return;
+    act(() => api(`/api/admin/topics/${t.id}`, { method: 'PUT', body: { name } }), 'Tópico renomeado');
+  }
+
+  function removeTopic(t) {
+    if (!confirm(`Excluir o tópico "${t.name}"? Só é possível se ele estiver sem enquetes.`)) return;
+    act(() => api(`/api/admin/topics/${t.id}`, { method: 'DELETE' }), 'Tópico excluído');
+  }
+
+  $('#topic-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    $('#topic-error').textContent = '';
+    try {
+      await api('/api/admin/topics', { method: 'POST', body: { name: $('#topic-name').value } });
+      $('#topic-name').value = '';
+      toast('Tópico criado');
+      await loadPolls();
+    } catch (err) {
+      if (err.status === 401) handleError(err);
+      else $('#topic-error').textContent = err.message;
+    }
+  });
+
+  // Caixa "em qual tópico?", usada ao publicar e ao mover uma enquete
+  const topicDialog = $('#topic-dialog');
+  function askTopic(title, name, currentId, onPick) {
+    $('#topic-dlg-title').textContent = title;
+    $('#topic-dlg-name').textContent = name;
+    $('#topic-dlg-choices').replaceChildren(...state.topics.map((t) => h('button', {
+      class: 'btn', type: 'button', disabled: t.id === currentId,
+      onclick: () => { topicDialog.close(); onPick(t); },
+    }, t.id === currentId ? `${t.name} (atual)` : t.name)));
+    topicDialog.showModal();
+  }
+  $('#topic-dlg-cancel').addEventListener('click', () => topicDialog.close());
+  topicDialog.addEventListener('click', (e) => { if (e.target === topicDialog) topicDialog.close(); });
+
+  function moveTopic(p) {
+    askTopic('Mover para qual tópico?', p.title, pollTopicId(p), (t) =>
+      act(() => api(`/api/admin/polls/${p.id}/topic`, { method: 'POST', body: { topicId: t.id } }), `Enquete movida para ${t.name}`));
+  }
+
   function renderList() {
     const box = $('#poll-list');
-    $('#list-title').textContent = `Enquetes (${state.polls.length}) · ${state.users} ${state.users === 1 ? 'participante' : 'participantes'}`;
+    const sel = selectedTopicId();
+    const topic = state.topics.find((t) => t.id === sel);
+    const polls = state.polls.filter((p) => pollTopicId(p) === sel);
+    $('#list-title').textContent = `${topic ? topic.name : 'Enquetes'}: ${polls.length} ${polls.length === 1 ? 'enquete' : 'enquetes'} · ${state.users} ${state.users === 1 ? 'participante' : 'participantes'}`;
     box.replaceChildren();
-    if (!state.polls.length) {
-      box.append(h('div', { class: 'empty' }, h('p', {}, 'Nenhuma enquete publicada. Use o formulário para criar a primeira.')));
+    if (!polls.length) {
+      box.append(h('div', { class: 'empty' }, h('p', {}, 'Nenhuma enquete neste tópico. Use a aba ✏️ Criar para publicar uma.')));
       return;
     }
-    state.polls.forEach((p) => box.append(renderPoll(p)));
+    polls.forEach((p) => box.append(renderPoll(p)));
   }
 
   function confirmAnswer(p, article) {
@@ -326,6 +398,7 @@
   }
 
   function startEdit(p) {
+    setAdminTab('create'); // o formulário fica na aba Criar
     state.editing = p.id;
     $('#f-title').value = p.title;
     $('#f-desc').value = p.description || '';
@@ -343,9 +416,33 @@
     $('#f-title').focus({ preventScroll: true });
   }
 
-  $('#form-cancel').addEventListener('click', resetForm);
+  $('#form-cancel').addEventListener('click', () => { resetForm(); setAdminTab('polls'); });
 
-  $('#poll-form').addEventListener('submit', async (e) => {
+  async function saveForm(body, editing, topic) {
+    const submit = $('#form-submit');
+    submit.disabled = true;
+    try {
+      if (editing) {
+        await api(`/api/admin/polls/${editing}`, { method: 'PUT', body });
+        toast('Alterações salvas');
+      } else {
+        await api('/api/admin/polls', { method: 'POST', body: { ...body, topicId: topic.id } });
+        const notified = body.notify && state.notify && state.pushEnabled;
+        toast(`Enquete publicada em ${topic.name}${notified ? ' e inscritos avisados' : ' (sem notificação)'}`);
+        state.topicTab = topic.id; // a aba Enquetes abre direto no tópico escolhido
+      }
+      resetForm();
+      await loadPolls();
+      if (editing) setAdminTab('polls');
+    } catch (err) {
+      if (err.status === 401) handleError(err);
+      else $('#form-error').textContent = err.message;
+    } finally {
+      submit.disabled = false;
+    }
+  }
+
+  $('#poll-form').addEventListener('submit', (e) => {
     e.preventDefault();
     $('#form-error').textContent = '';
     const closes = $('#f-closes').value;
@@ -356,30 +453,287 @@
       closesAt: closes ? new Date(closes).toISOString() : null,
     };
     const editing = state.editing;
-    if (!editing) {
-      body.options = $('#f-options').value.split('\n');
-      body.notify = $('#f-notify').checked;
+    if (editing) {
+      saveForm(body, editing, null);
+      return;
     }
+    body.options = $('#f-options').value.split('\n');
+    body.notify = $('#f-notify').checked;
+    if (!state.topics.length) {
+      $('#form-error').textContent = 'Crie um tópico (aba Enquetes, Gerenciar tópicos) antes de publicar.';
+      return;
+    }
+    // Com um só tópico não há o que perguntar; com mais de um, abre a caixa de escolha
+    if (state.topics.length === 1) {
+      saveForm(body, null, state.topics[0]);
+      return;
+    }
+    askTopic('Em qual tópico publicar?', body.title, null, (topic) => saveForm(body, null, topic));
+  });
 
-    const submit = $('#form-submit');
+  /* ---------- Prêmios únicos ---------- */
+  function prizeIcon(p) {
+    return p.imageUrl
+      ? h('img', { class: 'ach-thumb', src: p.imageUrl, alt: '' })
+      : h('span', { class: 'ach-thumb ph' }, p.emoji);
+  }
+
+  async function loadPrizes() {
+    try {
+      const data = await api('/api/admin/prizes');
+      state.prizes = data.prizes;
+      state.notifyPrize = data.notifyPrize;
+      state.pushEnabled = data.pushEnabled;
+      renderPrizeNotify();
+      renderPrizes();
+    } catch (e) {
+      handleError(e);
+    }
+  }
+
+  function renderPrizeNotify() {
+    const el = $('#notify-prize');
+    el.checked = state.notifyPrize;
+    el.disabled = !state.pushEnabled;
+    $('#notify-prize-hint').textContent = state.pushEnabled
+      ? 'A notificação diz o nome de quem conquistou e o nome do prêmio.'
+      : 'As notificações push não estão configuradas neste servidor (faltam as chaves VAPID).';
+  }
+  bindFlag('#notify-prize', 'notifyPrize', 'notifyPrize', 'Aviso de prêmio conquistado ligado', 'Aviso de prêmio conquistado desligado', renderPrizeNotify);
+
+  function prizeStatusText(p) {
+    if (p.status === 'held') {
+      const who = `${p.holder.name}${p.holder.banned ? ' (banido)' : ''}`;
+      return `Com ${who} desde ${new Date(p.holder.wonAt).toLocaleDateString('pt-BR')}`;
+    }
+    return p.status === 'open' ? 'Disponível: o primeiro a chegar leva' : 'Sem dono (liberar para voltar a disputar)';
+  }
+
+  function renderPrizes() {
+    const box = $('#prize-list');
+    box.replaceChildren();
+    if (!state.prizes.length) {
+      box.append(h('p', { class: 'hint' }, 'Nenhum prêmio criado ainda.'));
+      return;
+    }
+    box.append(...state.prizes.map((p) => h('div', { class: 'house-row prize-row' },
+      prizeIcon(p),
+      h('span', { class: 'nm' },
+        `${p.name} — ${p.points} pts`,
+        h('small', { class: 'hint' }, prizeStatusText(p))),
+      p.status === 'held'
+        ? h('button', { class: 'btn danger small', type: 'button', onclick: () => removePrizeHolder(p) }, 'Remover do dono')
+        : null,
+      p.status === 'vacant'
+        ? h('button', { class: 'btn small', type: 'button', onclick: () => releasePrize(p) }, 'Liberar de novo')
+        : null,
+      h('button', { class: 'btn ghost small', type: 'button', onclick: () => startEditPrize(p) }, 'Editar'),
+      h('button', { class: 'btn danger small', type: 'button', onclick: () => deletePrize(p) }, 'Excluir'))));
+  }
+
+  function resetPrizeForm() {
+    state.prizeEditing = null;
+    $('#prize-form').reset();
+    $('#prize-points').value = 500;
+    $('#prize-submit').textContent = 'Criar prêmio';
+    $('#prize-cancel').hidden = true;
+    $('#prize-error').textContent = '';
+  }
+
+  function startEditPrize(p) {
+    state.prizeEditing = p.id;
+    $('#prize-name').value = p.name;
+    $('#prize-points').value = p.points;
+    $('#prize-emoji').value = p.emoji || '';
+    $('#prize-image').value = p.imageUrl || '';
+    $('#prize-submit').textContent = 'Salvar alterações';
+    $('#prize-cancel').hidden = false;
+    $('#prize-error').textContent = '';
+    $('#prize-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    $('#prize-name').focus({ preventScroll: true });
+  }
+  $('#prize-cancel').addEventListener('click', resetPrizeForm);
+
+  $('#prize-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    $('#prize-error').textContent = '';
+    const body = {
+      name: $('#prize-name').value,
+      points: $('#prize-points').value,
+      emoji: $('#prize-emoji').value,
+      imageUrl: $('#prize-image').value,
+    };
+    const editing = state.prizeEditing;
+    const submit = $('#prize-submit');
     submit.disabled = true;
     try {
       if (editing) {
-        await api(`/api/admin/polls/${editing}`, { method: 'PUT', body });
-        toast('Alterações salvas');
+        await api(`/api/admin/prizes/${editing}`, { method: 'PUT', body });
+        toast('Prêmio atualizado');
       } else {
-        await api('/api/admin/polls', { method: 'POST', body });
-        toast(body.notify && state.notify && state.pushEnabled ? 'Enquete publicada e inscritos avisados' : 'Enquete publicada (sem notificação)');
+        await api('/api/admin/prizes', { method: 'POST', body });
+        toast('Prêmio criado');
       }
-      resetForm();
-      await loadPolls();
+      resetPrizeForm();
+      await loadPrizes();
     } catch (err) {
       if (err.status === 401) handleError(err);
-      else $('#form-error').textContent = err.message;
+      else $('#prize-error').textContent = err.message;
     } finally {
       submit.disabled = false;
     }
   });
+
+  async function prizeAction(request, okMessage) {
+    try {
+      const r = await request();
+      toast(typeof okMessage === 'function' ? okMessage(r) : okMessage);
+      await loadPrizes();
+    } catch (e) {
+      handleError(e);
+    }
+  }
+
+  function removePrizeHolder(p) {
+    if (!confirm(`Remover "${p.name}" de ${p.holder.name}? O prêmio fica sem dono até você liberar de novo, e ${p.holder.name} não poderá ganhá-lo de volta.`)) return;
+    prizeAction(() => api(`/api/admin/prizes/${p.id}/remove`, { method: 'POST' }), 'Prêmio removido. Está sem dono.');
+  }
+
+  function releasePrize(p) {
+    if (!confirm(`Liberar "${p.name}" de novo? Fica com quem chegou primeiro nos ${p.points} pontos (quem já perdeu o prêmio não conta). Se já houver gente acima disso, ele é entregue agora.`)) return;
+    prizeAction(() => api(`/api/admin/prizes/${p.id}/release`, { method: 'POST' }),
+      (r) => (r.holder ? `Prêmio liberado e entregue a ${r.holder}` : 'Prêmio liberado. Ninguém atingiu a pontuação ainda.'));
+  }
+
+  function deletePrize(p) {
+    if (!confirm(`Excluir o prêmio "${p.name}"? ${p.status === 'held' ? `${p.holder.name} perde o prêmio. ` : ''}Isso não pode ser desfeito.`)) return;
+    if (state.prizeEditing === p.id) resetPrizeForm();
+    prizeAction(() => api(`/api/admin/prizes/${p.id}`, { method: 'DELETE' }), 'Prêmio excluído');
+  }
+
+  /* ---------- Usuários: pontos e banimento ---------- */
+  async function loadUsers() {
+    try {
+      state.adminUsers = (await api('/api/admin/users')).users;
+      renderUsers();
+    } catch (e) {
+      handleError(e);
+    }
+  }
+
+  function userAvatar(u) {
+    return u.avatar
+      ? h('img', { class: 'ach-thumb', src: u.avatar, alt: '', referrerpolicy: 'no-referrer' })
+      : h('span', { class: 'ach-thumb ph' }, (u.name || '?').slice(0, 1).toUpperCase());
+  }
+
+  function renderUsers() {
+    const box = $('#user-list');
+    const term = $('#user-search').value.trim().toLowerCase();
+    const list = state.adminUsers.filter((u) => !term || u.name.toLowerCase().includes(term) || u.login.toLowerCase().includes(term));
+    box.replaceChildren();
+    if (!list.length) {
+      box.append(h('p', { class: 'hint' }, state.adminUsers.length ? 'Ninguém encontrado.' : 'Nenhum participante ainda.'));
+      return;
+    }
+    box.append(...list.map((u) => {
+      const pts = u.banned
+        ? 'Banido'
+        : `${u.points} pts no geral · ${u.weeklyPoints} na semana${u.adjust ? ` · ajuste ${u.adjust > 0 ? '+' : ''}${u.adjust}` : ''}`;
+      return h('div', { class: 'house-row', style: u.banned ? 'opacity: 0.6' : '' },
+        userAvatar(u),
+        h('span', { class: 'nm' }, `${u.name} (@${u.login})`, h('small', { class: 'hint' }, pts)),
+        u.banned ? null : h('button', { class: 'btn ghost small', type: 'button', onclick: () => openAdjust(u) }, '± Pontos'),
+        h('button', {
+          class: u.banned ? 'btn small' : 'btn danger small', type: 'button', onclick: () => toggleBan(u),
+        }, u.banned ? 'Desbanir' : 'Banir'));
+    }));
+  }
+  $('#user-search').addEventListener('input', renderUsers);
+
+  async function toggleBan(u) {
+    const msg = u.banned
+      ? `Desbanir ${u.name}? Ele volta a poder entrar e votar, e reaparece nos rankings com os pontos que tinha.`
+      : `Banir ${u.name}? Ele é desconectado, não consegue mais entrar nem votar, e some dos rankings. Os votos ficam guardados.`;
+    if (!confirm(msg)) return;
+    try {
+      await api(`/api/admin/users/${u.id}/ban`, { method: 'POST', body: { banned: !u.banned } });
+      toast(u.banned ? `${u.name} desbanido` : `${u.name} banido`);
+      await loadUsers();
+    } catch (e) {
+      handleError(e);
+    }
+  }
+
+  // Diálogo de ajuste de pontos
+  const adjDialog = $('#adj-dialog');
+  let adjUser = null;
+
+  async function loadAdjustments() {
+    const box = $('#adj-list');
+    try {
+      const { adjustments } = await api(`/api/admin/users/${adjUser.id}/adjustments`);
+      box.replaceChildren();
+      if (!adjustments.length) {
+        box.append(h('p', { class: 'hint' }, 'Nenhum ajuste feito ainda.'));
+        return;
+      }
+      box.append(...adjustments.map((a) => h('div', { class: 'house-row' },
+        h('span', { class: 'nm' },
+          `${a.delta > 0 ? '+' : ''}${a.delta} pts${a.note ? ` · ${a.note}` : ''}`,
+          h('small', { class: 'hint' }, fmtDate(a.createdAt))),
+        h('button', { class: 'btn ghost small', type: 'button', onclick: () => undoAdjustment(a) }, 'Desfazer'))));
+    } catch (e) {
+      box.replaceChildren(h('p', { class: 'hint' }, e.message));
+    }
+  }
+
+  function openAdjust(u) {
+    adjUser = u;
+    $('#adj-name').textContent = `${u.name} (@${u.login})`;
+    $('#adj-current').textContent = `Agora: ${u.points} pts no geral, ${u.weeklyPoints} na semana.`;
+    $('#adj-amount').value = '';
+    $('#adj-note').value = '';
+    $('#adj-error').textContent = '';
+    $('#adj-list').replaceChildren();
+    adjDialog.showModal();
+    loadAdjustments();
+  }
+
+  async function applyAdjust(sign) {
+    const n = Number($('#adj-amount').value);
+    if (!Number.isInteger(n) || n < 1 || n > 100000) {
+      $('#adj-error').textContent = 'Digite um número inteiro entre 1 e 100000.';
+      return;
+    }
+    $('#adj-error').textContent = '';
+    try {
+      await api(`/api/admin/users/${adjUser.id}/points`, { method: 'POST', body: { delta: sign * n, note: $('#adj-note').value } });
+      toast(`${sign > 0 ? '+' : '-'}${n} pontos para ${adjUser.name}`);
+      adjDialog.close();
+      await loadUsers();
+    } catch (e) {
+      if (e.status === 401) { adjDialog.close(); handleError(e); } else $('#adj-error').textContent = e.message;
+    }
+  }
+  $('#adj-add').addEventListener('click', () => applyAdjust(1));
+  $('#adj-sub').addEventListener('click', () => applyAdjust(-1));
+  $('#adj-close').addEventListener('click', () => adjDialog.close());
+  adjDialog.addEventListener('click', (e) => { if (e.target === adjDialog) adjDialog.close(); });
+
+  async function undoAdjustment(a) {
+    if (!confirm(`Desfazer o ajuste de ${a.delta > 0 ? '+' : ''}${a.delta} pts? Conquistas e prêmios já ganhos com ele continuam com quem ganhou.`)) return;
+    try {
+      await api(`/api/admin/adjustments/${a.id}`, { method: 'DELETE' });
+      toast('Ajuste desfeito');
+      await loadUsers();
+      const fresh = state.adminUsers.find((x) => x.id === adjUser.id);
+      if (fresh) { adjUser = fresh; $('#adj-current').textContent = `Agora: ${fresh.points} pts no geral, ${fresh.weeklyPoints} na semana.`; }
+      await loadAdjustments();
+    } catch (e) {
+      handleError(e);
+    }
+  }
 
   /* ---------- Notificações: chaves gerais e caixa por enquete ---------- */
   function renderNotify() {

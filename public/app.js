@@ -7,6 +7,8 @@
   const state = {
     user: null,
     polls: [],
+    topics: [],
+    pollTopic: null,
     pollsError: null,
     loaded: false,
     ranking: null,
@@ -128,8 +130,7 @@
     }
   }
 
-  // Mostra o botão só quando o navegador e o servidor suportam. Sem isso,
-  // fica escondido (ex.: Safari no iPhone fora da tela inicial).
+  // Mostra o botão só quando o navegador e o servidor suportam. Sem isso
   async function initNotify() {
     const btn = $('#notify-toggle');
     if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return;
@@ -178,10 +179,12 @@
     return h('span', {}, b.emoji);
   }
 
-  function badgesEl(badges) {
+  function badgesEl(badges, prizes) {
     if (!badges) return null;
-    const chips = ['points', 'streak', 'titles', 'misses', 'missstreak'].map((t) => badges[t]).filter(Boolean)
-      .map((b) => h('span', { class: 'badge', title: b.label }, badgeIcon(b)));
+    // Prêmios únicos primeiro (são os mais raros), depois os emblemas de conquista
+    const prizeChips = (prizes || []).map((p) => h('span', { class: 'badge prize', title: p.name }, badgeIcon(p)));
+    const chips = prizeChips.concat(['points', 'streak', 'titles', 'misses', 'missstreak'].map((t) => badges[t]).filter(Boolean)
+      .map((b) => h('span', { class: 'badge', title: b.label }, badgeIcon(b))));
     return chips.length ? h('span', { class: 'badges' }, chips) : null;
   }
 
@@ -223,6 +226,7 @@
     try {
       const data = await api('/api/polls');
       state.polls = data.polls;
+      state.topics = data.topics || [];
       state.pollsError = null;
     } catch (e) {
       state.pollsError = e.message;
@@ -305,6 +309,33 @@
         noteFor(p)));
   }
 
+  /* ---------- Tópicos das enquetes ---------- */
+  // Enquete sem tópico válido cai no primeiro tópico
+  const pollTopicOf = (p) => (state.topics.some((t) => t.id === p.topicId) ? p.topicId : (state.topics[0] && state.topics[0].id));
+
+  function topicsWithPolls() {
+    return state.topics.filter((t) => state.polls.some((p) => pollTopicOf(p) === t.id));
+  }
+
+  // Mantém a aba escolhida; senão abre na primeira que tem enquete aberta (ou na primeira)
+  function selectedPollTopic(topics) {
+    if (topics.some((t) => t.id === state.pollTopic)) return state.pollTopic;
+    const withOpen = topics.find((t) => state.polls.some((p) => p.status === 'open' && pollTopicOf(p) === t.id));
+    return (withOpen || topics[0] || {}).id || null;
+  }
+
+  function renderTopicTabs(topics, sel) {
+    const bar = $('#topic-tabs');
+    bar.hidden = topics.length < 2;
+    bar.replaceChildren(...topics.map((t) => {
+      const open = state.polls.filter((p) => p.status === 'open' && pollTopicOf(p) === t.id).length;
+      return h('button', {
+        type: 'button', role: 'tab', 'aria-selected': String(t.id === sel),
+        onclick: () => { state.pollTopic = t.id; renderPolls(); },
+      }, open ? `${t.name} (${open})` : t.name);
+    }));
+  }
+
   function renderPolls() {
     const box = $('#polls');
     const active = document.activeElement && box.contains(document.activeElement)
@@ -312,17 +343,25 @@
     box.replaceChildren();
 
     if (state.pollsError) {
+      $('#topic-tabs').hidden = true;
       box.append(h('div', { class: 'empty' },
         h('p', {}, state.pollsError),
         h('button', { class: 'btn', type: 'button', onclick: loadPolls }, 'Tentar de novo')));
       return;
     }
     if (!state.polls.length) {
+      $('#topic-tabs').hidden = true;
       box.append(h('div', { class: 'empty' },
-        h('p', {}, 'Ainda não há enquetes. Quando o admin publicar a primeira, ela aparece aqui.')));
+        h('p', {}, 'Ainda não há enquetes. Quando o alto clero publicar a primeira, ela aparece aqui.')));
       return;
     }
-    state.polls.forEach((p) => box.append(renderPoll(p)));
+    // Divisórias por tópico (Geral, Casa...): só aparecem tópicos que têm enquete, e a barra
+    // só aparece quando há mais de um. Com um só, mostra tudo direto.
+    const topics = topicsWithPolls();
+    const sel = selectedPollTopic(topics);
+    const shown = topics.length > 1 ? state.polls.filter((p) => pollTopicOf(p) === sel) : state.polls;
+    renderTopicTabs(topics, sel);
+    shown.forEach((p) => box.append(renderPoll(p)));
     if (active) {
       const el = box.querySelector(`[data-key="${active}"]`);
       if (el) el.focus({ preventScroll: true });
@@ -365,9 +404,25 @@
     }
   }
 
+  async function loadPrizes() {
+    try {
+      state.prizes = await api('/api/prizes');
+      state.prizesError = null;
+    } catch (e) {
+      state.prizesError = e.message;
+    }
+    const any = Boolean(state.prizes && state.prizes.prizes.length);
+    $('#rtab-prizes').hidden = !any;
+    if (state.rankingPeriod === 'prizes') {
+      if (state.prizes && !any) { setRankingPeriod('weekly'); return; } // não há mais prêmios
+      renderRanking();
+    }
+  }
+
   async function loadRanking() {
     loadHall(); // também mostra/esconde a aba do hall
-    if (state.rankingPeriod === 'hall') return;
+    loadPrizes(); // e a dos prêmios
+    if (state.rankingPeriod === 'hall' || state.rankingPeriod === 'prizes') return;
     try {
       const path = state.rankingPeriod === 'weekly' ? '/api/ranking/weekly' : '/api/ranking';
       state.ranking = await api(path);
@@ -381,7 +436,7 @@
   function setRankingPeriod(period) {
     if (state.rankingPeriod === period) return;
     state.rankingPeriod = period;
-    for (const p of ['weekly', 'general', 'hall']) $(`#rtab-${p}`).setAttribute('aria-selected', String(period === p));
+    for (const p of ['weekly', 'general', 'hall', 'prizes']) $(`#rtab-${p}`).setAttribute('aria-selected', String(period === p));
     state.ranking = null;
     renderRanking();
     loadRanking();
@@ -389,6 +444,38 @@
   $('#rtab-general').addEventListener('click', () => setRankingPeriod('general'));
   $('#rtab-weekly').addEventListener('click', () => setRankingPeriod('weekly'));
   $('#rtab-hall').addEventListener('click', () => setRankingPeriod('hall'));
+  $('#rtab-prizes').addEventListener('click', () => setRankingPeriod('prizes'));
+
+  function renderPrizes(box) {
+    if (state.prizesError) {
+      box.append(h('div', { class: 'empty' },
+        h('p', {}, state.prizesError),
+        h('button', { class: 'btn', type: 'button', onclick: loadPrizes }, 'Tentar de novo')));
+      return;
+    }
+    if (!state.prizes) {
+      box.append(h('p', { class: 'note' }, 'Carregando prêmios…'));
+      return;
+    }
+    box.append(h('p', { class: 'note' }, 'Cada prêmio tem um só dono: a primeira pessoa a chegar nos pontos do ranking geral leva.'));
+    box.append(h('ul', { class: 'achs' }, state.prizes.prizes.map((p) => {
+      const holder = p.holder;
+      const me = holder && state.user && state.user.id === holder.userId;
+      return h('li', { class: 'ach prize' + (p.status === 'held' ? '' : ' free') },
+        p.imageUrl
+          ? h('img', { class: 'ach-icon img', src: p.imageUrl, alt: '' })
+          : h('span', { class: 'ach-icon' }, p.emoji),
+        h('span', {},
+          h('span', { class: 'nm' }, `${p.name} · ${p.points} pts`),
+          p.status === 'held'
+            ? h('span', { class: 'hits' }, 'Conquistado por ',
+                h('a', { href: `#perfil/${holder.userId}` }, holder.name + (me ? ' (você)' : '')),
+                ` em ${new Date(holder.wonAt).toLocaleDateString('pt-BR')}`)
+            : h('span', { class: 'hits' }, p.status === 'open'
+                ? 'Disponível: o primeiro a chegar leva'
+                : 'Sem dono por enquanto')));
+    })));
+  }
 
   function renderHall(box) {
     if (state.hallError) {
@@ -428,6 +515,7 @@
     const box = $('#ranking');
     box.replaceChildren();
     if (state.rankingPeriod === 'hall') { renderHall(box); return; }
+    if (state.rankingPeriod === 'prizes') { renderPrizes(box); return; }
     if (state.rankError) {
       box.append(h('div', { class: 'empty' },
         h('p', {}, state.rankError),
@@ -444,7 +532,7 @@
       return;
     }
     if (state.rankingPeriod === 'general' && !r.resolved) {
-      box.append(h('p', { class: 'note' }, 'Os pontos aparecem quando o admin definir a primeira resposta certa.'));
+      box.append(h('p', { class: 'note' }, 'Os pontos aparecem quando o alto clero definir a primeira resposta certa.'));
     }
     if (r.resetAt && r.resetAt > '1970-01-02') {
       box.append(h('p', { class: 'note' }, `Desde ${fmtDate(r.resetAt)}.`));
@@ -460,7 +548,7 @@
         h('span', {},
           h('span', { class: 'nm-row' },
             h('a', { class: 'nm', href: `#perfil/${s.userId}` }, (s.isHouse ? ' ' : '') + s.name + (me ? ' (você)' : '')),
-            badgesEl(s.badges)),
+            badgesEl(s.badges, s.prizes)),
           h('span', { class: 'hits' }, s.isHouse ? 'Conta da casa' : hits)),
         h('span', { class: 'score' }, h('b', {}, s.points), ' pts'));
     })));
@@ -533,6 +621,9 @@
         (p.bonus ? ` Já rendeu ${p.bonus} pontos.` : '')));
     }
 
+    if (p.adjust) {
+      box.append(h('p', { class: 'note' }, `Ajuste do admin: ${p.adjust > 0 ? '+' : ''}${p.adjust} pontos no total geral.`));
+    }
     if (p.misses) {
       box.append(h('p', { class: 'note' },
         `Erros: ${p.misses} · pior sequência de erros: ${p.bestMissStreak}.`));
@@ -549,6 +640,18 @@
             h('span', { class: 'nm' }, `${MEDAL[w.place]} ${w.place}º lugar`),
             h('span', { class: 'hits' }, weekLabel(w))),
           h('div', { class: 'hist-res' }, h('span', { class: 'pill hit' }, `${w.points} pts`))))));
+    }
+
+    if (p.prizes && p.prizes.length) {
+      box.append(
+        h('h3', { class: 'section-title' }, 'Prêmios'),
+        h('ul', { class: 'achs' }, p.prizes.map((z) => h('li', { class: 'ach prize' },
+          z.imageUrl
+            ? h('img', { class: 'ach-icon img', src: z.imageUrl, alt: '' })
+            : h('span', { class: 'ach-icon' }, z.emoji),
+          h('span', {},
+            h('span', { class: 'nm' }, z.name),
+            h('span', { class: 'hits' }, `Conquistado em ${new Date(z.wonAt).toLocaleDateString('pt-BR')}`))))));
     }
 
     box.append(h('h3', { class: 'section-title' }, 'Conquistas'));
@@ -637,6 +740,7 @@
     const result = params.get('login');
     if (!result) return;
     if (result === 'cancelado') toast('Login cancelado.');
+    else if (result === 'banido') toast('Esta conta foi banida do bolão.', true);
     else toast('Não foi possível entrar com a Twitch. Tente de novo.', true);
     history.replaceState(null, '', location.pathname + location.hash);
   }

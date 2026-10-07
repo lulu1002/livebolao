@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Bolão</title>
   <meta name="theme-color" content="#14237A">
+  <meta name="color-scheme" content="light dark">
+  <script src="/theme.js"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&display=swap">
@@ -19,6 +21,7 @@
         <button type="button" role="tab" id="tab-ranking" aria-controls="view-ranking" aria-selected="false">Ranking</button>
       </nav>
       <div class="head-actions">
+        <button id="theme-toggle" class="icon-btn" type="button" title="Mudar o tema" aria-label="Mudar o tema">🌙</button>
         <button id="notify-toggle" class="icon-btn" type="button" title="Ativar notificações" aria-label="Ativar notificações" hidden>🔕</button>
         <div class="who" id="who"></div>
       </div>
@@ -27,6 +30,7 @@
 
   <main class="wrap main">
     <section id="view-polls" role="tabpanel" aria-labelledby="tab-polls">
+      <div class="subtabs" id="topic-tabs" role="tablist" aria-label="Tópicos das enquetes" hidden></div>
       <div id="polls" class="polls" aria-live="polite">
         <p class="note">Carregando enquetes…</p>
       </div>
@@ -36,7 +40,8 @@
       <div class="subtabs" role="tablist" aria-label="Período do ranking">
         <button type="button" role="tab" id="rtab-weekly" aria-selected="true">Semanal</button>
         <button type="button" role="tab" id="rtab-general" aria-selected="false">Geral</button>
-        <button type="button" role="tab" id="rtab-hall" aria-selected="false" hidden>Pikas Da semana (lá ele)</button>
+        <button type="button" role="tab" id="rtab-hall" aria-selected="false" hidden>Pikas da semana(lá ele)</button></button>
+        <button type="button" role="tab" id="rtab-prizes" aria-selected="false" hidden>Prêmios</button>
       </div>
       <div id="ranking"></div>
     </section>

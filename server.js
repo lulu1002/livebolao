@@ -138,7 +138,7 @@ async function currentUser(req) {
   if (!token) return null;
   const { rows } = await q(
     `select u.* from sessions s join users u on u.id = s.user_id
-     where s.token_hash = $1 and s.kind = 'user' and s.expires_at > now()`,
+     where s.token_hash = $1 and s.kind = 'user' and s.expires_at > now() and not u.banned`,
     [sha(token)]
   );
   return rows[0] || null;
@@ -187,6 +187,7 @@ function rowToPoll(r) {
     visible: r.visible,
     counted: r.counted,
     correctOptionId: r.correct_option_id,
+    topicId: r.topic_id,
     createdAt: iso(r.created_at),
     resolvedAt: iso(r.resolved_at),
     options: [],
@@ -256,6 +257,7 @@ function publicPoll(p, votes, userId) {
     description: p.description,
     points: p.points,
     closesAt: p.closesAt,
+    topicId: p.topicId,
     status,
     createdAt: p.createdAt,
     totalVotes: votes.length,
@@ -283,6 +285,7 @@ function adminPoll(p, votes) {
     description: p.description,
     points: p.points,
     closesAt: p.closesAt,
+    topicId: p.topicId,
     status: pollStatus(p),
     createdAt: p.createdAt,
     resolvedAt: p.resolvedAt,
@@ -387,10 +390,44 @@ async function syncAchievements(list, defs) {
    2) rodadas "guardadas" (tabela awards): enquetes apagadas ou reabertas mantendo os pontos.
    "Zerar ranking" limpa as duas. Os resultados são lidos em ordem cronológica
    para calcular a sequência de acertos e o bônus (se ativado). */
+/* Prêmio único. Pra cada prêmio livre, o dono é quem cruzou a pontuação primeiro
+   (empate: mais pontos naquele momento). Contas da casa, banidos e quem já perdeu o
+   prêmio ficam de fora. A gravação só vale se o prêmio ainda estiver livre, então duas
+   contas simultâneas nunca geram dois donos. Devolve os prêmios de cada dono. */
+async function syncPrizes(list, openPrizes, removed, reachByUser) {
+  const blocked = new Set(removed.map((r) => `${r.prize_id}:${r.user_id}`));
+  for (const pz of openPrizes) {
+    const cands = list
+      .filter((s) => !s.isHouse && !blocked.has(`${pz.id}:${s.userId}`) && (reachByUser.get(s.userId) || {})[pz.id])
+      .map((s) => ({ userId: s.userId, ...reachByUser.get(s.userId)[pz.id] }));
+    if (!cands.length) continue;
+    const when = (x) => (x ? new Date(x).getTime() : 0);
+    cands.sort((a, b) => when(a.at) - when(b.at) || b.points - a.points || a.userId.localeCompare(b.userId));
+    const w = cands[0];
+    const claim = await q(
+      'update prizes set holder_id = $1, open = false, won_at = $2 where id = $3 and open and holder_id is null',
+      [w.userId, w.at || new Date().toISOString(), pz.id]
+    );
+    // Só quem de fato levou o prêmio dispara o aviso (rowCount 0 = outro cálculo chegou antes)
+    if (claim.rowCount) {
+      const winner = list.find((s) => s.userId === w.userId);
+      notifyPrizeWon(winner ? winner.name : 'Alguém', pz.name)
+        .catch((e) => console.error('Notificação de prêmio falhou:', e.message));
+    }
+  }
+  const { rows } = await q('select id, name, emoji, image_url, holder_id, won_at from prizes where holder_id is not null order by won_at');
+  const byUser = new Map();
+  for (const r of rows) {
+    if (!byUser.has(r.holder_id)) byUser.set(r.holder_id, []);
+    byUser.get(r.holder_id).push({ id: r.id, name: r.name, emoji: r.emoji, imageUrl: r.image_url, wonAt: iso(r.won_at) });
+  }
+  return byUser;
+}
+
 async function computeStandings() {
   const { general: generalResetAt } = await getResetAts();
-  const [users, results, rounds, rule, achDefs, titleRows] = await Promise.all([
-    q('select id, display_name, login, avatar_url, is_house from users'),
+  const [users, results, rounds, rule, achDefs, titleRows, adjRows, prizeRows, removedRows] = await Promise.all([
+    q('select id, display_name, login, avatar_url, is_house from users where not banned'),
     q(
       `select r.user_id, r.poll_title, r.chosen, r.correct, r.points, r.hit, r.at
        from (
@@ -416,6 +453,9 @@ async function computeStandings() {
     getStreakRule(),
     fetchAchievementDefs(),
     q('select user_id, count(*)::int as n from hall_places where place = 1 group by user_id'),
+    q('select user_id, delta, created_at as at from point_adjustments where created_at > $1', [generalResetAt]),
+    q('select id, name, points from prizes where open and holder_id is null'),
+    q('select prize_id, user_id from prize_removed'),
   ]);
 
   const stats = new Map(users.rows.map((u) => [u.id, {
@@ -434,8 +474,22 @@ async function computeStandings() {
     bestMissStreak: 0,
     titles: 0,
     bonus: 0,
+    adjust: 0,
     history: [],
   }]));
+
+  // Prêmio único: pra cada prêmio livre, guarda quando cada pessoa cruzou a pontuação
+  const openPrizes = prizeRows.rows;
+  const reachByUser = new Map();
+  const trackPrizes = (s, at) => {
+    for (const pz of openPrizes) {
+      const mine = reachByUser.get(s.userId) || {};
+      if (!mine[pz.id] && s.points >= pz.points) {
+        mine[pz.id] = { at, points: s.points };
+        reachByUser.set(s.userId, mine);
+      }
+    }
+  };
 
   // Títulos semanais vêm do hall da fama e não dependem das datas de "zerar"
   for (const t of titleRows.rows) {
@@ -443,9 +497,22 @@ async function computeStandings() {
     if (s) s.titles = t.n;
   }
 
-  for (const r of results.rows) {
+  // Resultados e ajustes manuais, em ordem cronológica (sem data = mais antigo)
+  const when = (x) => (x ? new Date(x).getTime() : 0);
+  const events = [
+    ...results.rows.map((r) => ({ ...r, kind: 'result' })),
+    ...adjRows.rows.map((a) => ({ user_id: a.user_id, delta: a.delta, at: a.at, kind: 'adjust' })),
+  ].sort((a, b) => when(a.at) - when(b.at));
+
+  for (const r of events) {
     const s = stats.get(r.user_id);
     if (!s) continue;
+    if (r.kind === 'adjust') {
+      s.points += r.delta;
+      s.adjust += r.delta;
+      trackPrizes(s, r.at);
+      continue;
+    }
     s.played += 1;
     let bonus = 0;
     if (r.hit) {
@@ -474,6 +541,7 @@ async function computeStandings() {
       bonus,
       at: iso(r.at),
     });
+    trackPrizes(s, r.at);
   }
 
   const list = [...stats.values()];
@@ -487,7 +555,9 @@ async function computeStandings() {
   });
 
   const achByUser = await syncAchievements(list, achDefs);
+  const heldPrizes = await syncPrizes(list, openPrizes, removedRows.rows, reachByUser);
   for (const s of list) {
+    s.prizes = heldPrizes.get(s.userId) || [];
     const achs = (achByUser.get(s.userId) || []).filter((a) => a.active); // níveis ocultos não aparecem
     s.achievements = achs;
     const topOf = (type) => {
@@ -511,8 +581,8 @@ async function computeStandings() {
    recente. Não tem emblema, sequência nem histórico — é só o placar da semana. */
 async function computeWeeklyStandings() {
   const { weekly: weeklyResetAt } = await getResetAts();
-  const [users, totals] = await Promise.all([
-    q('select id, display_name, login, avatar_url, is_house from users'),
+  const [users, totals, adj] = await Promise.all([
+    q('select id, display_name, login, avatar_url, is_house from users where not banned'),
     q(
       `select r.user_id,
               coalesce(sum(case when r.hit then r.points else 0 end), 0)::int as points,
@@ -530,9 +600,11 @@ async function computeWeeklyStandings() {
        group by r.user_id`,
       [weeklyResetAt]
     ),
+    q('select user_id, sum(delta)::int as delta from point_adjustments where created_at > $1 group by user_id', [weeklyResetAt]),
   ]);
 
   const byUser = new Map(totals.rows.map((r) => [r.user_id, r]));
+  const adjByUser = new Map(adj.rows.map((r) => [r.user_id, r.delta]));
   const list = users.rows.map((u) => {
     const t = byUser.get(u.id);
     return {
@@ -541,7 +613,7 @@ async function computeWeeklyStandings() {
       login: u.login,
       avatar: u.avatar_url,
       isHouse: u.is_house,
-      points: t ? t.points : 0,
+      points: (t ? t.points : 0) + (adjByUser.get(u.id) || 0),
       hits: t ? t.hits : 0,
       played: t ? t.played : 0,
     };
@@ -677,6 +749,21 @@ async function notifyNewPoll(title) {
   await sendPush(rows, { title: 'Nova enquete no Bolão', body: short(title, 120), url: '/' });
 }
 
+/* Prêmio conquistado: avisa todos os inscritos com o nome de quem levou e do prêmio */
+async function notifyPrizeWon(userName, prizeName) {
+  if (!PUSH_ENABLED || !(await getFlag('notify_prize'))) return;
+  const { rows } = await q(
+    `select s.endpoint, s.p256dh, s.auth from push_subscriptions s
+     left join users u on u.id = s.user_id
+     where not coalesce(u.banned, false)`
+  );
+  await sendPush(rows, {
+    title: '🏅 Prêmio conquistado!',
+    body: `${short(userName, 40)} conquistou "${short(prizeName, 60)}"`,
+    url: '/#ranking',
+  });
+}
+
 /* Resultado: cada participante inscrito (e logado quando se inscreveu) que votou
    na enquete recebe "acertou +N" ou "dessa vez não deu". */
 async function notifyPollResult(pollId) {
@@ -688,7 +775,7 @@ async function notifyPollResult(pollId) {
     `select s.endpoint, s.p256dh, s.auth, (v.option_id = $2) as hit
      from votes v
      join push_subscriptions s on s.user_id = v.user_id
-     join users u on u.id = v.user_id and not u.is_house
+     join users u on u.id = v.user_id and not u.is_house and not u.banned
      where v.poll_id = $1`,
     [pollId, poll.correct_option_id]
   );
@@ -714,8 +801,10 @@ async function notifyClosingSoon() {
   for (const p of polls) {
     const { rows: subs } = await q(
       `select s.endpoint, s.p256dh, s.auth from push_subscriptions s
+       left join users bu on bu.id = s.user_id
        where s.user_id is null
-          or not exists (select 1 from votes v where v.poll_id = $1 and v.user_id = s.user_id)`,
+          or (not coalesce(bu.banned, false)
+              and not exists (select 1 from votes v where v.poll_id = $1 and v.user_id = s.user_id))`,
       [p.id]
     );
     const mins = Math.max(1, Math.round((Date.parse(p.closes_at) - Date.now()) / 60000));
@@ -808,9 +897,10 @@ app.get('/auth/twitch/callback', limit('oauth', 60, 15 * 60 * 1000), wrap(async 
        values ($1, $2, $3, $4, $5)
        on conflict (twitch_id) do update
          set login = excluded.login, display_name = excluded.display_name, avatar_url = excluded.avatar_url
-       returning id, (xmax = 0) as inserted`,
+       returning id, banned, (xmax = 0) as inserted`,
       [uid(), String(tw.id), String(tw.login), String(tw.display_name || tw.login), avatar]
     );
+    if (rows[0].banned) return res.redirect('/?login=banido');
     const token = await createSession('user', rows[0].id, USER_SESSION_MS);
     setCookie(res, 'sid', token, USER_SESSION_MS / 1000);
     if (rows[0].inserted) broadcast(); // novo participante aparece no ranking
@@ -864,6 +954,22 @@ app.post('/api/push/unsubscribe', wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
+/* ---------- Tópicos das enquetes ---------- */
+async function fetchTopics() {
+  const { rows } = await q('select id, name from poll_topics order by position, created_at');
+  return rows;
+}
+
+async function fetchTopicsWithCounts() {
+  const { rows } = await q(
+    `select t.id, t.name, count(p.id)::int as polls
+     from poll_topics t left join polls p on p.topic_id = t.id
+     group by t.id, t.name, t.position, t.created_at
+     order by t.position, t.created_at`
+  );
+  return rows;
+}
+
 /* ---------- Enquetes e votos ---------- */
 app.get('/api/polls', wrap(async (req, res) => {
   const u = await currentUser(req);
@@ -877,7 +983,7 @@ app.get('/api/polls', wrap(async (req, res) => {
     if (a.status === 'open' && deadline(a) !== deadline(b)) return deadline(a) - deadline(b);
     return b.createdAt.localeCompare(a.createdAt);
   });
-  res.json({ polls });
+  res.json({ polls, topics: await fetchTopics() });
 }));
 
 app.post('/api/polls/:id/vote', requireUser, wrap(async (req, res) => {
@@ -973,6 +1079,7 @@ app.get('/api/admin/polls', requireAdmin, wrap(async (req, res) => {
   const users = await q('select count(*)::int as n from users');
   res.json({
     polls: list.map((p) => adminPoll(p, votes.get(p.id) || [])),
+    topics: await fetchTopicsWithCounts(),
     users: users.rows[0].n,
     mode: await getMode(),
     streak: await getStreakRule(),
@@ -987,20 +1094,27 @@ app.get('/api/admin/polls', requireAdmin, wrap(async (req, res) => {
 app.post('/api/admin/polls', requireAdmin, wrap(async (req, res) => {
   const input = parsePollInput(req.body, true);
   if (input.error) return res.status(400).json({ error: input.error });
+  const topicId = String(req.body?.topicId ?? '');
+  const topic = await q('select id from poll_topics where id = $1', [topicId]);
+  if (!topic.rowCount) return res.status(400).json({ error: 'Escolha o tópico da enquete.' });
   const id = uid();
   await tx(async (c) => {
     const mode = await c.query("select value from settings where key = 'mode'");
-    // Modo "substituir": as enquetes anteriores saem da página principal.
+    // Modo "substituir": as enquetes anteriores DO MESMO TÓPICO saem da página principal.
     // Continuam no painel admin (e seguem valendo pontos quando forem resolvidas).
     if (!mode.rows[0] || mode.rows[0].value !== 'accumulate') {
-      await c.query('update polls set visible = false, closed = (closed or correct_option_id is null) where visible');
+      await c.query(
+        'update polls set visible = false, closed = (closed or correct_option_id is null) where visible and topic_id = $1',
+        [topicId]
+      );
     }
-    await c.query('insert into polls (id, title, description, points, closes_at) values ($1, $2, $3, $4, $5)', [
+    await c.query('insert into polls (id, title, description, points, closes_at, topic_id) values ($1, $2, $3, $4, $5, $6)', [
       id,
       input.title,
       input.description,
       input.points,
       input.closesAt,
+      topicId,
     ]);
     for (const [i, o] of input.options.entries()) {
       await c.query('insert into poll_options (id, poll_id, label, position) values ($1, $2, $3, $4)', [o.id, id, o.text, i]);
@@ -1029,6 +1143,60 @@ app.put('/api/admin/polls/:id', requireAdmin, wrap(async (req, res) => {
     input.closesAt,
   ]);
   if (!r.rowCount) return notFound(res);
+  res.json({ ok: true });
+}));
+
+/* Muda a enquete de tópico */
+app.post('/api/admin/polls/:id/topic', requireAdmin, wrap(async (req, res) => {
+  const topicId = String(req.body?.topicId ?? '');
+  const topic = await q('select id from poll_topics where id = $1', [topicId]);
+  if (!topic.rowCount) return res.status(400).json({ error: 'Tópico inválido.' });
+  const r = await q('update polls set topic_id = $2 where id = $1', [req.params.id, topicId]);
+  if (!r.rowCount) return notFound(res);
+  res.json({ ok: true });
+}));
+
+/* CRUD dos tópicos (o painel admin cria, renomeia e apaga) */
+const MAX_TOPICS = 12;
+
+function parseTopicName(body) {
+  const name = String(body?.name ?? '').trim().replace(/\s+/g, ' ');
+  if (name.length < 1 || name.length > 30) return { error: 'O nome do tópico precisa ter de 1 a 30 caracteres.' };
+  return { name };
+}
+
+app.post('/api/admin/topics', requireAdmin, wrap(async (req, res) => {
+  const input = parseTopicName(req.body);
+  if (input.error) return res.status(400).json({ error: input.error });
+  const { rows } = await q('select count(*)::int as n, coalesce(max(position), -1)::int as maxpos from poll_topics');
+  if (rows[0].n >= MAX_TOPICS) return res.status(400).json({ error: `O limite é de ${MAX_TOPICS} tópicos.` });
+  const dup = await q('select 1 from poll_topics where lower(name) = lower($1)', [input.name]);
+  if (dup.rowCount) return res.status(400).json({ error: 'Já existe um tópico com esse nome.' });
+  const id = uid();
+  await q('insert into poll_topics (id, name, position) values ($1, $2, $3)', [id, input.name, rows[0].maxpos + 1]);
+  res.status(201).json({ id });
+}));
+
+app.put('/api/admin/topics/:id', requireAdmin, wrap(async (req, res) => {
+  const input = parseTopicName(req.body);
+  if (input.error) return res.status(400).json({ error: input.error });
+  const dup = await q('select 1 from poll_topics where lower(name) = lower($1) and id <> $2', [input.name, req.params.id]);
+  if (dup.rowCount) return res.status(400).json({ error: 'Já existe um tópico com esse nome.' });
+  const r = await q('update poll_topics set name = $2 where id = $1', [req.params.id, input.name]);
+  if (!r.rowCount) return res.status(404).json({ error: 'Tópico não encontrado.' });
+  res.json({ ok: true });
+}));
+
+app.delete('/api/admin/topics/:id', requireAdmin, wrap(async (req, res) => {
+  const t = await q('select count(*)::int as total, count(*) filter (where id = $1)::int as found from poll_topics', [req.params.id]);
+  if (!t.rows[0].found) return res.status(404).json({ error: 'Tópico não encontrado.' });
+  if (t.rows[0].total <= 1) return res.status(400).json({ error: 'Precisa existir pelo menos um tópico.' });
+  const used = await q('select count(*)::int as n from polls where topic_id = $1', [req.params.id]);
+  if (used.rows[0].n > 0) {
+    const n = used.rows[0].n;
+    return res.status(400).json({ error: `Este tópico tem ${n} ${n === 1 ? 'enquete' : 'enquetes'}. Mova ou exclua antes de apagar o tópico.` });
+  }
+  await q('delete from poll_topics where id = $1', [req.params.id]);
   res.json({ ok: true });
 }));
 
@@ -1284,7 +1452,7 @@ async function fetchHall() {
             u.id as user_id, u.display_name, u.login, u.avatar_url
      from hall_weeks w
      join hall_places p on p.week_id = w.id
-     join users u on u.id = p.user_id
+     join users u on u.id = p.user_id and not u.banned
      order by w.ended_at desc, p.place, u.display_name`
   );
   const weeks = [];
@@ -1313,6 +1481,182 @@ app.get('/api/admin/hall', requireAdmin, wrap(async (req, res) => {
   res.json({ visible: await getFlag('hall_visible'), weeks: await fetchHall() });
 }));
 
+/* ---------- Prêmios únicos ---------- */
+const PRIZE_SQL = `
+  select p.id, p.name, p.emoji, p.image_url, p.points, p.open, p.holder_id, p.won_at,
+         u.display_name as holder_name, u.login as holder_login, u.avatar_url as holder_avatar,
+         coalesce(u.banned, false) as holder_banned,
+         (select count(*) from prize_removed r where r.prize_id = p.id)::int as removed_count
+  from prizes p left join users u on u.id = p.holder_id
+  order by p.points, p.created_at`;
+
+// Situação do prêmio: com dono, disponível (o primeiro a chegar leva) ou sem dono (removido)
+const prizeStatus = (r) => (r.holder_id ? 'held' : r.open ? 'open' : 'vacant');
+
+function parsePrizeInput(body) {
+  const name = String(body?.name ?? '').trim();
+  if (name.length < 2 || name.length > 40) return { error: 'O nome precisa ter de 2 a 40 caracteres.' };
+  const points = Number(body?.points);
+  if (!Number.isInteger(points) || points < 1 || points > 1000000) {
+    return { error: 'Os pontos precisam ser um número inteiro maior que 0.' };
+  }
+  let emoji = String(body?.emoji ?? '').trim();
+  if (emoji.length > 8) return { error: 'Emoji inválido.' };
+  if (!emoji) emoji = '🏅';
+  const imageUrl = String(body?.imageUrl ?? '').trim();
+  if (imageUrl && (!imageUrl.startsWith('https://') || imageUrl.length > 500)) {
+    return { error: 'A imagem precisa ser um link https:// válido.' };
+  }
+  return { name, points, emoji, imageUrl: imageUrl || null };
+}
+
+// Vitrine pública. Dono banido aparece como "sem dono" (o banido some de tudo).
+app.get('/api/prizes', wrap(async (req, res) => {
+  const { rows } = await q(PRIZE_SQL);
+  res.json({
+    prizes: rows.map((r) => {
+      const hidden = r.holder_id && r.holder_banned;
+      return {
+        id: r.id, name: r.name, emoji: r.emoji, imageUrl: r.image_url, points: r.points,
+        status: hidden ? 'vacant' : prizeStatus(r),
+        holder: r.holder_id && !hidden
+          ? { userId: r.holder_id, name: r.holder_name, avatar: r.holder_avatar, wonAt: iso(r.won_at) }
+          : null,
+      };
+    }),
+  });
+}));
+
+app.get('/api/admin/prizes', requireAdmin, wrap(async (req, res) => {
+  const { rows } = await q(PRIZE_SQL);
+  res.json({
+    notifyPrize: await getFlag('notify_prize'),
+    pushEnabled: PUSH_ENABLED,
+    prizes: rows.map((r) => ({
+      id: r.id, name: r.name, emoji: r.emoji, imageUrl: r.image_url, points: r.points,
+      status: prizeStatus(r), removedCount: r.removed_count,
+      holder: r.holder_id
+        ? { userId: r.holder_id, name: r.holder_name, login: r.holder_login, banned: r.holder_banned, wonAt: iso(r.won_at) }
+        : null,
+    })),
+  });
+}));
+
+app.post('/api/admin/prizes', requireAdmin, wrap(async (req, res) => {
+  const input = parsePrizeInput(req.body);
+  if (input.error) return res.status(400).json({ error: input.error });
+  const id = uid();
+  await q('insert into prizes (id, name, emoji, image_url, points) values ($1, $2, $3, $4, $5)',
+    [id, input.name, input.emoji, input.imageUrl, input.points]);
+  await computeStandings().catch(() => {}); // se alguém já passou dessa pontuação, o prêmio já vai pro primeiro que chegou
+  res.status(201).json({ id });
+}));
+
+app.put('/api/admin/prizes/:id', requireAdmin, wrap(async (req, res) => {
+  const input = parsePrizeInput(req.body);
+  if (input.error) return res.status(400).json({ error: input.error });
+  const r = await q('update prizes set name = $2, emoji = $3, image_url = $4, points = $5 where id = $1',
+    [req.params.id, input.name, input.emoji, input.imageUrl, input.points]);
+  if (!r.rowCount) return res.status(404).json({ error: 'Prêmio não encontrado.' });
+  await computeStandings().catch(() => {});
+  res.json({ ok: true });
+}));
+
+app.delete('/api/admin/prizes/:id', requireAdmin, wrap(async (req, res) => {
+  const r = await q('delete from prizes where id = $1', [req.params.id]);
+  if (!r.rowCount) return res.status(404).json({ error: 'Prêmio não encontrado.' });
+  res.json({ ok: true });
+}));
+
+// Tira o prêmio de quem tem: fica sem dono, e a pessoa não o ganha de volta
+app.post('/api/admin/prizes/:id/remove', requireAdmin, wrap(async (req, res) => {
+  const done = await tx(async (c) => {
+    const { rows } = await c.query('select holder_id from prizes where id = $1 for update', [req.params.id]);
+    if (!rows[0]) return 'missing';
+    if (!rows[0].holder_id) return 'nobody';
+    await c.query('insert into prize_removed (prize_id, user_id) values ($1, $2) on conflict do nothing', [req.params.id, rows[0].holder_id]);
+    await c.query('update prizes set holder_id = null, won_at = null, open = false where id = $1', [req.params.id]);
+    return 'ok';
+  });
+  if (done === 'missing') return res.status(404).json({ error: 'Prêmio não encontrado.' });
+  if (done === 'nobody') return res.status(400).json({ error: 'Este prêmio não tem dono.' });
+  res.json({ ok: true });
+}));
+
+// Libera de novo: o primeiro que já tiver (ou vier a ter) a pontuação leva, menos quem perdeu
+app.post('/api/admin/prizes/:id/release', requireAdmin, wrap(async (req, res) => {
+  const cur = await q('select holder_id from prizes where id = $1', [req.params.id]);
+  if (!cur.rowCount) return res.status(404).json({ error: 'Prêmio não encontrado.' });
+  if (cur.rows[0].holder_id) return res.status(400).json({ error: 'Este prêmio já tem dono. Remova antes de liberar.' });
+  await q('update prizes set open = true where id = $1', [req.params.id]);
+  await computeStandings().catch(() => {}); // já entrega se alguém tiver a pontuação
+  const after = await q(
+    'select p.holder_id, u.display_name from prizes p left join users u on u.id = p.holder_id where p.id = $1', [req.params.id]);
+  res.json({ ok: true, holder: after.rows[0].holder_id ? after.rows[0].display_name : null });
+}));
+
+/* ---------- Usuários: pontos manuais e banimento ---------- */
+app.get('/api/admin/users', requireAdmin, wrap(async (req, res) => {
+  const [{ rows }, st, wk] = await Promise.all([
+    q('select id, display_name, login, avatar_url, banned, created_at from users where not is_house order by lower(display_name)'),
+    computeStandings(),
+    computeWeeklyStandings(),
+  ]);
+  const gen = new Map(st.ranking.map((s) => [s.userId, s]));
+  const week = new Map(wk.ranking.map((s) => [s.userId, s]));
+  res.json({
+    users: rows.map((u) => ({
+      id: u.id, name: u.display_name, login: u.login, avatar: u.avatar_url, banned: u.banned,
+      // banido não entra no ranking, então não tem pontos calculados
+      points: gen.has(u.id) ? gen.get(u.id).points : null,
+      weeklyPoints: week.has(u.id) ? week.get(u.id).points : null,
+      adjust: gen.has(u.id) ? gen.get(u.id).adjust : 0,
+      prizes: gen.has(u.id) ? gen.get(u.id).prizes.length : 0,
+    })),
+  });
+}));
+
+const realUser = async (id) => (await q('select id, banned from users where id = $1 and not is_house', [id])).rows[0];
+
+app.post('/api/admin/users/:id/ban', requireAdmin, wrap(async (req, res) => {
+  if (typeof req.body?.banned !== 'boolean') return res.status(400).json({ error: 'Informe banned como true ou false.' });
+  const u = await realUser(req.params.id);
+  if (!u) return res.status(404).json({ error: 'Participante não encontrado.' });
+  await q('update users set banned = $2 where id = $1', [u.id, req.body.banned]);
+  if (req.body.banned) await q('delete from sessions where user_id = $1', [u.id]); // derruba o login na hora
+  await computeStandings().catch(() => {});
+  res.json({ ok: true });
+}));
+
+app.post('/api/admin/users/:id/points', requireAdmin, wrap(async (req, res) => {
+  const delta = Number(req.body?.delta);
+  if (!Number.isInteger(delta) || delta === 0 || Math.abs(delta) > 100000) {
+    return res.status(400).json({ error: 'Informe um valor inteiro diferente de zero (até 100000).' });
+  }
+  const note = String(req.body?.note ?? '').trim().slice(0, 120);
+  const u = await realUser(req.params.id);
+  if (!u) return res.status(404).json({ error: 'Participante não encontrado.' });
+  await q('insert into point_adjustments (user_id, delta, note) values ($1, $2, $3)', [u.id, delta, note]);
+  await computeStandings().catch(() => {}); // conquistas e prêmio único reagem na hora
+  res.json({ ok: true });
+}));
+
+app.get('/api/admin/users/:id/adjustments', requireAdmin, wrap(async (req, res) => {
+  const { rows } = await q(
+    'select id, delta, note, created_at from point_adjustments where user_id = $1 order by created_at desc, id desc limit 15',
+    [req.params.id]
+  );
+  res.json({ adjustments: rows.map((r) => ({ id: String(r.id), delta: r.delta, note: r.note, createdAt: iso(r.created_at) })) });
+}));
+
+app.delete('/api/admin/adjustments/:id', requireAdmin, wrap(async (req, res) => {
+  if (!/^\d+$/.test(req.params.id)) return res.status(404).json({ error: 'Ajuste não encontrado.' });
+  const r = await q('delete from point_adjustments where id = $1', [req.params.id]);
+  if (!r.rowCount) return res.status(404).json({ error: 'Ajuste não encontrado.' });
+  await computeStandings().catch(() => {});
+  res.json({ ok: true });
+}));
+
 app.delete('/api/admin/hall/:id', requireAdmin, wrap(async (req, res) => {
   const r = await q('delete from hall_weeks where id = $1', [req.params.id]);
   if (!r.rowCount) return res.status(404).json({ error: 'Semana não encontrada.' });
@@ -1331,6 +1675,7 @@ app.post('/api/admin/settings', requireAdmin, wrap(async (req, res) => {
     notifyResult: 'notify_result',
     notifyClosing: 'notify_closing',
     hallVisible: 'hall_visible',
+    notifyPrize: 'notify_prize',
   };
   for (const [field, key] of Object.entries(flagFields)) {
     const v = req.body?.[field];
@@ -1487,6 +1832,12 @@ app.use((err, req, res, next) => {
     await pool.query(fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8'));
   } catch (e) {
     console.error('Falha ao preparar o banco de dados:', e.message);
+    try { // diagnóstico: mostra linhas de conquista com tipo fora do esperado
+      const bad = await pool.query(
+        "select id, type from achievement_defs where type not in ('points','streak','misses','missstreak','titles')"
+      );
+      if (bad.rowCount) console.error('Conquistas com tipo desconhecido:', JSON.stringify(bad.rows));
+    } catch (_) { /* tabela pode nem existir */ }
     process.exit(1);
   }
   const server = app.listen(PORT, '0.0.0.0', () => console.log(`Bolão rodando na porta ${PORT}`));
