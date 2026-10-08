@@ -415,11 +415,11 @@ async function syncPrizes(list, openPrizes, removed, reachByUser) {
         .catch((e) => console.error('Notificação de prêmio falhou:', e.message));
     }
   }
-  const { rows } = await q('select id, name, emoji, image_url, holder_id, won_at from prizes where holder_id is not null order by won_at');
+  const { rows } = await q('select id, name, emoji, image_url, description, holder_id, won_at from prizes where holder_id is not null order by won_at');
   const byUser = new Map();
   for (const r of rows) {
     if (!byUser.has(r.holder_id)) byUser.set(r.holder_id, []);
-    byUser.get(r.holder_id).push({ id: r.id, name: r.name, emoji: r.emoji, imageUrl: r.image_url, wonAt: iso(r.won_at) });
+    byUser.get(r.holder_id).push({ id: r.id, name: r.name, emoji: r.emoji, imageUrl: r.image_url, description: r.description, wonAt: iso(r.won_at) });
   }
   return byUser;
 }
@@ -1310,11 +1310,20 @@ function parseHouseInput(body) {
 }
 
 app.get('/api/admin/house-accounts', requireAdmin, wrap(async (req, res) => {
-  const { rows } = await q(
-    'select id, display_name, avatar_url, created_at from users where is_house order by created_at'
-  );
+  const [{ rows }, st, wk] = await Promise.all([
+    q('select id, display_name, avatar_url, created_at from users where is_house order by created_at'),
+    computeStandings(),
+    computeWeeklyStandings(),
+  ]);
+  const gen = new Map(st.ranking.map((s) => [s.userId, s]));
+  const week = new Map(wk.ranking.map((s) => [s.userId, s]));
   res.json({
-    accounts: rows.map((r) => ({ id: r.id, name: r.display_name, avatarUrl: r.avatar_url, createdAt: iso(r.created_at) })),
+    accounts: rows.map((r) => ({
+      id: r.id, name: r.display_name, avatarUrl: r.avatar_url, createdAt: iso(r.created_at),
+      points: gen.has(r.id) ? gen.get(r.id).points : 0,
+      weeklyPoints: week.has(r.id) ? week.get(r.id).points : 0,
+      adjust: gen.has(r.id) ? gen.get(r.id).adjust : 0,
+    })),
   });
 }));
 
@@ -1483,7 +1492,7 @@ app.get('/api/admin/hall', requireAdmin, wrap(async (req, res) => {
 
 /* ---------- Prêmios únicos ---------- */
 const PRIZE_SQL = `
-  select p.id, p.name, p.emoji, p.image_url, p.points, p.open, p.holder_id, p.won_at,
+  select p.id, p.name, p.emoji, p.image_url, p.description, p.points, p.open, p.holder_id, p.won_at,
          u.display_name as holder_name, u.login as holder_login, u.avatar_url as holder_avatar,
          coalesce(u.banned, false) as holder_banned,
          (select count(*) from prize_removed r where r.prize_id = p.id)::int as removed_count
@@ -1507,7 +1516,9 @@ function parsePrizeInput(body) {
   if (imageUrl && (!imageUrl.startsWith('https://') || imageUrl.length > 500)) {
     return { error: 'A imagem precisa ser um link https:// válido.' };
   }
-  return { name, points, emoji, imageUrl: imageUrl || null };
+  const description = String(body?.description ?? '').trim();
+  if (description.length > 300) return { error: 'A descrição pode ter até 300 caracteres.' };
+  return { name, points, emoji, imageUrl: imageUrl || null, description };
 }
 
 // Vitrine pública. Dono banido aparece como "sem dono" (o banido some de tudo).
@@ -1517,7 +1528,7 @@ app.get('/api/prizes', wrap(async (req, res) => {
     prizes: rows.map((r) => {
       const hidden = r.holder_id && r.holder_banned;
       return {
-        id: r.id, name: r.name, emoji: r.emoji, imageUrl: r.image_url, points: r.points,
+        id: r.id, name: r.name, emoji: r.emoji, imageUrl: r.image_url, description: r.description, points: r.points,
         status: hidden ? 'vacant' : prizeStatus(r),
         holder: r.holder_id && !hidden
           ? { userId: r.holder_id, name: r.holder_name, avatar: r.holder_avatar, wonAt: iso(r.won_at) }
@@ -1533,7 +1544,7 @@ app.get('/api/admin/prizes', requireAdmin, wrap(async (req, res) => {
     notifyPrize: await getFlag('notify_prize'),
     pushEnabled: PUSH_ENABLED,
     prizes: rows.map((r) => ({
-      id: r.id, name: r.name, emoji: r.emoji, imageUrl: r.image_url, points: r.points,
+      id: r.id, name: r.name, emoji: r.emoji, imageUrl: r.image_url, description: r.description, points: r.points,
       status: prizeStatus(r), removedCount: r.removed_count,
       holder: r.holder_id
         ? { userId: r.holder_id, name: r.holder_name, login: r.holder_login, banned: r.holder_banned, wonAt: iso(r.won_at) }
@@ -1546,8 +1557,8 @@ app.post('/api/admin/prizes', requireAdmin, wrap(async (req, res) => {
   const input = parsePrizeInput(req.body);
   if (input.error) return res.status(400).json({ error: input.error });
   const id = uid();
-  await q('insert into prizes (id, name, emoji, image_url, points) values ($1, $2, $3, $4, $5)',
-    [id, input.name, input.emoji, input.imageUrl, input.points]);
+  await q('insert into prizes (id, name, emoji, image_url, description, points) values ($1, $2, $3, $4, $5, $6)',
+    [id, input.name, input.emoji, input.imageUrl, input.description, input.points]);
   await computeStandings().catch(() => {}); // se alguém já passou dessa pontuação, o prêmio já vai pro primeiro que chegou
   res.status(201).json({ id });
 }));
@@ -1555,8 +1566,8 @@ app.post('/api/admin/prizes', requireAdmin, wrap(async (req, res) => {
 app.put('/api/admin/prizes/:id', requireAdmin, wrap(async (req, res) => {
   const input = parsePrizeInput(req.body);
   if (input.error) return res.status(400).json({ error: input.error });
-  const r = await q('update prizes set name = $2, emoji = $3, image_url = $4, points = $5 where id = $1',
-    [req.params.id, input.name, input.emoji, input.imageUrl, input.points]);
+  const r = await q('update prizes set name = $2, emoji = $3, image_url = $4, description = $6, points = $5 where id = $1',
+    [req.params.id, input.name, input.emoji, input.imageUrl, input.points, input.description]);
   if (!r.rowCount) return res.status(404).json({ error: 'Prêmio não encontrado.' });
   await computeStandings().catch(() => {});
   res.json({ ok: true });
@@ -1634,7 +1645,8 @@ app.post('/api/admin/users/:id/points', requireAdmin, wrap(async (req, res) => {
     return res.status(400).json({ error: 'Informe um valor inteiro diferente de zero (até 100000).' });
   }
   const note = String(req.body?.note ?? '').trim().slice(0, 120);
-  const u = await realUser(req.params.id);
+  // Vale para participantes e também para contas da casa
+  const u = (await q('select id from users where id = $1', [req.params.id])).rows[0];
   if (!u) return res.status(404).json({ error: 'Participante não encontrado.' });
   await q('insert into point_adjustments (user_id, delta, note) values ($1, $2, $3)', [u.id, delta, note]);
   await computeStandings().catch(() => {}); // conquistas e prêmio único reagem na hora

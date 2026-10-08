@@ -246,6 +246,8 @@ create table if not exists prizes (
   won_at     timestamptz,
   created_at timestamptz not null default now()
 );
+-- Texto opcional que o site mostra junto do prêmio (o que é, como ganhar, etc.).
+alter table prizes add column if not exists description text not null default '';
 -- Quem já perdeu um prêmio não o ganha de volta quando ele é liberado.
 create table if not exists prize_removed (
   prize_id   text not null references prizes(id) on delete cascade,

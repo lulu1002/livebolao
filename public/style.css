@@ -423,6 +423,9 @@ a.nm:hover { text-decoration: underline; }
 .badge { font-size: 1.05rem; }
 .badge.prize { filter: drop-shadow(0 0 3px rgba(240, 180, 0, 0.9)); }
 .ach.prize { border-color: var(--prize-border); background: var(--prize-bg); }
+.achs.prizes-list { grid-template-columns: 1fr; } /* prêmio tem descrição: ocupa a linha toda */
+.prize-desc { display: block; margin: 0.2rem 0 0.1rem; font-size: 0.9rem; font-weight: 400; color: var(--ink); white-space: pre-line; overflow-wrap: anywhere; }
+.house-row .nm small.prize-desc { color: var(--ink); }
 .ach.prize.free { opacity: 0.8; border-style: dashed; }
 .badge-img { width: 18px; height: 18px; border-radius: 3px; object-fit: cover; vertical-align: middle; }
 .hits { display: block; font-size: 0.875rem; color: var(--ink-soft); }

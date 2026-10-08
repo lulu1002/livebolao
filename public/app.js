@@ -458,7 +458,7 @@
       return;
     }
     box.append(h('p', { class: 'note' }, 'Cada prêmio tem um só dono: a primeira pessoa a chegar nos pontos do ranking geral leva.'));
-    box.append(h('ul', { class: 'achs' }, state.prizes.prizes.map((p) => {
+    box.append(h('ul', { class: 'achs prizes-list' }, state.prizes.prizes.map((p) => {
       const holder = p.holder;
       const me = holder && state.user && state.user.id === holder.userId;
       return h('li', { class: 'ach prize' + (p.status === 'held' ? '' : ' free') },
@@ -467,13 +467,14 @@
           : h('span', { class: 'ach-icon' }, p.emoji),
         h('span', {},
           h('span', { class: 'nm' }, `${p.name} · ${p.points} pts`),
+          p.description ? h('span', { class: 'prize-desc' }, p.description) : null,
           p.status === 'held'
             ? h('span', { class: 'hits' }, 'Conquistado por ',
                 h('a', { href: `#perfil/${holder.userId}` }, holder.name + (me ? ' (você)' : '')),
                 ` em ${new Date(holder.wonAt).toLocaleDateString('pt-BR')}`)
-            : h('span', { class: 'hits' }, p.status === 'open'
-                ? 'Disponível: o primeiro a chegar leva'
-                : 'Sem dono por enquanto')));
+            : p.status === 'open'
+              ? null // prêmio disponível: sem texto extra, só nome, pontos e descrição
+              : h('span', { class: 'hits' }, 'Sem dono por enquanto')));
     })));
   }
 
@@ -651,6 +652,7 @@
             : h('span', { class: 'ach-icon' }, z.emoji),
           h('span', {},
             h('span', { class: 'nm' }, z.name),
+            z.description ? h('span', { class: 'prize-desc' }, z.description) : null,
             h('span', { class: 'hits' }, `Conquistado em ${new Date(z.wonAt).toLocaleDateString('pt-BR')}`))))));
     }
 
