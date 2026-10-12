@@ -412,17 +412,17 @@
       state.prizesError = e.message;
     }
     const any = Boolean(state.prizes && state.prizes.prizes.length);
-    $('#rtab-prizes').hidden = !any;
-    if (state.rankingPeriod === 'prizes') {
-      if (state.prizes && !any) { setRankingPeriod('weekly'); return; } // não há mais prêmios
-      renderRanking();
+    $('#tab-prizes').hidden = !any;
+    if (state.view === 'prizes') {
+      if (state.prizes && !any) { navigate('#ranking'); return; } // não há mais prêmios
+      renderPrizesView();
     }
   }
 
   async function loadRanking() {
     loadHall(); // também mostra/esconde a aba do hall
     loadPrizes(); // e a dos prêmios
-    if (state.rankingPeriod === 'hall' || state.rankingPeriod === 'prizes') return;
+    if (state.rankingPeriod === 'hall') return;
     try {
       const path = state.rankingPeriod === 'weekly' ? '/api/ranking/weekly' : '/api/ranking';
       state.ranking = await api(path);
@@ -436,7 +436,7 @@
   function setRankingPeriod(period) {
     if (state.rankingPeriod === period) return;
     state.rankingPeriod = period;
-    for (const p of ['weekly', 'general', 'hall', 'prizes']) $(`#rtab-${p}`).setAttribute('aria-selected', String(period === p));
+    for (const p of ['weekly', 'general', 'hall']) $(`#rtab-${p}`).setAttribute('aria-selected', String(period === p));
     state.ranking = null;
     renderRanking();
     loadRanking();
@@ -444,7 +444,6 @@
   $('#rtab-general').addEventListener('click', () => setRankingPeriod('general'));
   $('#rtab-weekly').addEventListener('click', () => setRankingPeriod('weekly'));
   $('#rtab-hall').addEventListener('click', () => setRankingPeriod('hall'));
-  $('#rtab-prizes').addEventListener('click', () => setRankingPeriod('prizes'));
 
   function renderPrizes(box) {
     if (state.prizesError) {
@@ -476,6 +475,12 @@
               ? null // prêmio disponível: sem texto extra, só nome, pontos e descrição
               : h('span', { class: 'hits' }, 'Sem dono por enquanto')));
     })));
+  }
+
+  function renderPrizesView() {
+    const box = $('#prizes');
+    box.replaceChildren();
+    renderPrizes(box);
   }
 
   function renderHall(box) {
@@ -516,7 +521,6 @@
     const box = $('#ranking');
     box.replaceChildren();
     if (state.rankingPeriod === 'hall') { renderHall(box); return; }
-    if (state.rankingPeriod === 'prizes') { renderPrizes(box); return; }
     if (state.rankError) {
       box.append(h('div', { class: 'empty' },
         h('p', {}, state.rankError),
@@ -685,10 +689,13 @@
     state.view = view;
     $('#view-polls').hidden = view !== 'polls';
     $('#view-ranking').hidden = view !== 'ranking';
+    $('#view-prizes').hidden = view !== 'prizes';
     $('#view-profile').hidden = view !== 'profile';
     $('#tab-polls').setAttribute('aria-selected', String(view === 'polls'));
-    $('#tab-ranking').setAttribute('aria-selected', String(view !== 'polls'));
+    $('#tab-ranking').setAttribute('aria-selected', String(view === 'ranking' || view === 'profile'));
+    $('#tab-prizes').setAttribute('aria-selected', String(view === 'prizes'));
     if (view === 'ranking') loadRanking();
+    if (view === 'prizes') { renderPrizesView(); loadPrizes(); }
     if (view === 'profile') {
       state.profileId = profileId;
       state.profile = null;
@@ -702,7 +709,7 @@
   function route() {
     const m = location.hash.match(/^#perfil\/([\w-]+)$/);
     if (m) setView('profile', m[1]);
-    else setView(location.hash === '#ranking' ? 'ranking' : 'polls');
+    else setView(location.hash === '#ranking' ? 'ranking' : location.hash === '#premios' ? 'prizes' : 'polls');
   }
 
   function navigate(hash) {
@@ -713,10 +720,12 @@
   window.addEventListener('popstate', route); // botão voltar e links #perfil/...
   $('#tab-polls').addEventListener('click', () => navigate(''));
   $('#tab-ranking').addEventListener('click', () => navigate('#ranking'));
+  $('#tab-prizes').addEventListener('click', () => navigate('#premios'));
 
   /* ---------- Atualização automática ---------- */
   function refresh() {
     loadPolls();
+    loadPrizes();
     if (state.view === 'ranking') loadRanking();
     if (state.view === 'profile') loadProfile();
   }
@@ -759,6 +768,7 @@
     renderWho();
     route();
     loadPolls();
+    loadPrizes();
     connectEvents();
     // Plano B caso a conexão em tempo real caia
     setInterval(() => { if (!document.hidden) refresh(); }, 60000);
