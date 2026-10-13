@@ -176,6 +176,7 @@
     const article = h('article', { class: 'panel apoll' },
       h('div', { class: 'apoll-head' }, h('h3', {}, p.title),
         h('span', { class: 'pills' },
+          p.house ? h('span', { class: 'pill' }, '🏠 Casa') : null,
           p.visible ? null : h('span', { class: 'pill' }, 'Fora da página'),
           h('span', { class: `pill ${p.status}` }, statusText(p)))),
       h('p', { class: 'meta' }, meta),
@@ -288,9 +289,33 @@
       return;
     }
     const text = p.options.find((o) => o.id === sel.value).text;
+    if (p.house && state.house.length) {
+      // Enquete com a opção Casa: antes de confirmar, escolhe quais contas da casa erram
+      houseLoseTarget = { poll: p, optionId: sel.value };
+      $('#house-lose-name').textContent = `${p.title} — resposta certa: ${text}`;
+      $('#house-lose-options').replaceChildren(...state.house.map((acc) => h('label', { class: 'aopt' },
+        h('input', { type: 'checkbox', name: 'house-lose', value: acc.id }),
+        houseThumb(acc),
+        h('span', {}, acc.name))));
+      houseLoseDialog.showModal();
+      return;
+    }
     if (!confirm(`Confirmar "${text}" como resposta certa? Os pontos do ranking serão calculados agora.`)) return;
     act(() => api(`/api/admin/polls/${p.id}/resolve`, { method: 'POST', body: { optionId: sel.value } }), 'Resposta salva e ranking atualizado');
   }
+
+  const houseLoseDialog = $('#house-lose-dialog');
+  let houseLoseTarget = null;
+  $('#house-lose-cancel').addEventListener('click', () => houseLoseDialog.close());
+  houseLoseDialog.addEventListener('click', (e) => { if (e.target === houseLoseDialog) houseLoseDialog.close(); });
+  $('#house-lose-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const ids = [...$('#house-lose-options').querySelectorAll('input:checked')].map((i) => i.value);
+    const { poll, optionId } = houseLoseTarget;
+    houseLoseDialog.close();
+    act(() => api(`/api/admin/polls/${poll.id}/resolve`, { method: 'POST', body: { optionId, houseLoseIds: ids } }),
+      'Resposta salva e ranking atualizado');
+  });
 
   const houseWinDialog = $('#house-win-dialog');
   let houseWinTarget = null;
@@ -387,6 +412,7 @@
     state.editing = null;
     $('#poll-form').reset();
     $('#f-points').value = 10;
+    $('#f-house').checked = false;
     $('#f-options').disabled = false;
     $('#f-options-hint').textContent = 'De 1 a 10 opções, uma por linha.';
     $('#form-title').textContent = 'Nova enquete';
@@ -406,6 +432,7 @@
     $('#f-options').disabled = true;
     $('#f-options-hint').textContent = 'As opções não podem ser alteradas depois de publicar.';
     $('#f-points').value = p.points;
+    $('#f-house').checked = Boolean(p.house);
     $('#f-closes').value = toLocalInput(p.closesAt);
     $('#f-notify-field').hidden = true; // editar não envia notificação
     $('#form-title').textContent = 'Editar enquete';
@@ -451,6 +478,7 @@
       description: $('#f-desc').value,
       points: $('#f-points').value,
       closesAt: closes ? new Date(closes).toISOString() : null,
+      house: $('#f-house').checked,
     };
     const editing = state.editing;
     if (editing) {

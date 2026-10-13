@@ -188,6 +188,7 @@ function rowToPoll(r) {
     counted: r.counted,
     correctOptionId: r.correct_option_id,
     topicId: r.topic_id,
+    house: Boolean(r.house),
     createdAt: iso(r.created_at),
     resolvedAt: iso(r.resolved_at),
     options: [],
@@ -291,6 +292,7 @@ function adminPoll(p, votes) {
     resolvedAt: p.resolvedAt,
     visible: p.visible,
     counted: p.counted,
+    house: p.house,
     correctOptionId: p.correctOptionId,
     totalVotes: votes.length,
     houseWon: houseWon(p),
@@ -648,7 +650,7 @@ function parsePollInput(body, requireOptions) {
     closesAt = new Date(t).toISOString();
   }
 
-  const out = { title, description, points, closesAt };
+  const out = { title, description, points, closesAt, house: body?.house === true };
   if (requireOptions) {
     const raw = Array.isArray(body?.options) ? body.options : [];
     const options = [...new Set(raw.map((o) => String(o).trim()).filter(Boolean))];
@@ -1094,6 +1096,9 @@ app.get('/api/admin/polls', requireAdmin, wrap(async (req, res) => {
 app.post('/api/admin/polls', requireAdmin, wrap(async (req, res) => {
   const input = parsePollInput(req.body, true);
   if (input.error) return res.status(400).json({ error: input.error });
+  // Proteção: não deixa criar outra enquete com o mesmo nome (ignora maiúsculas e espaços nas pontas)
+  const dup = await q('select 1 from polls where lower(btrim(title)) = lower($1) limit 1', [input.title]);
+  if (dup.rowCount) return res.status(409).json({ error: 'Já existe uma enquete com esse nome. Use outro nome.' });
   const topicId = String(req.body?.topicId ?? '');
   const topic = await q('select id from poll_topics where id = $1', [topicId]);
   if (!topic.rowCount) return res.status(400).json({ error: 'Escolha o tópico da enquete.' });
@@ -1108,13 +1113,14 @@ app.post('/api/admin/polls', requireAdmin, wrap(async (req, res) => {
         [topicId]
       );
     }
-    await c.query('insert into polls (id, title, description, points, closes_at, topic_id) values ($1, $2, $3, $4, $5, $6)', [
+    await c.query('insert into polls (id, title, description, points, closes_at, topic_id, house) values ($1, $2, $3, $4, $5, $6, $7)', [
       id,
       input.title,
       input.description,
       input.points,
       input.closesAt,
       topicId,
+      input.house,
     ]);
     for (const [i, o] of input.options.entries()) {
       await c.query('insert into poll_options (id, poll_id, label, position) values ($1, $2, $3, $4)', [o.id, id, o.text, i]);
@@ -1134,13 +1140,15 @@ app.put('/api/admin/polls/:id', requireAdmin, wrap(async (req, res) => {
   const input = parsePollInput(req.body, false);
   if (input.error) return res.status(400).json({ error: input.error });
   const r = await q(`update polls set title = $2, description = $3, points = $4,
-      closing_notified = (closing_notified and closes_at is not distinct from $5::timestamptz), closes_at = $5
+      closing_notified = (closing_notified and closes_at is not distinct from $5::timestamptz), closes_at = $5,
+      house = $6
     where id = $1`, [
     req.params.id,
     input.title,
     input.description,
     input.points,
     input.closesAt,
+    input.house,
   ]);
   if (!r.rowCount) return notFound(res);
   res.json({ ok: true });
@@ -1243,38 +1251,56 @@ app.post('/api/admin/polls/:id/reopen', requireAdmin, wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
+/* Opção oculta "Casa" da enquete: guarda os votos das contas da casa (criada sob demanda) */
+async function ensureHouseOption(pollId) {
+  return tx(async (c) => {
+    const existing = await c.query('select id from poll_options where poll_id = $1 and is_house limit 1', [pollId]);
+    if (existing.rowCount) return existing.rows[0].id;
+    const { rowCount } = await c.query('select 1 from polls where id = $1', [pollId]);
+    if (!rowCount) return null;
+    const pos = await c.query('select coalesce(max(position), -1) + 1 as n from poll_options where poll_id = $1', [pollId]);
+    const id = uid();
+    await c.query('insert into poll_options (id, poll_id, label, position, is_house) values ($1, $2, $3, $4, true)', [
+      id, pollId, 'Casa', pos.rows[0].n,
+    ]);
+    return id;
+  });
+}
+
+const upsertHouseVote = (pollId, userId, optionId) => q(
+  `insert into votes (poll_id, user_id, option_id) values ($1, $2, $3)
+   on conflict (poll_id, user_id) do update set option_id = excluded.option_id, voted_at = now()`,
+  [pollId, userId, optionId]
+);
+
 app.post('/api/admin/polls/:id/resolve', requireAdmin, wrap(async (req, res) => {
   let optionId;
+  const pollRow = await q('select house from polls where id = $1', [req.params.id]);
+  if (!pollRow.rowCount) return notFound(res);
+  const houseFlag = pollRow.rows[0].house;
+  const pickHouse = async (raw) => {
+    const ids = Array.isArray(raw) ? raw.map(String) : [];
+    if (!ids.length) return [];
+    const { rows } = await q('select id from users where is_house and id = any($1::text[])', [ids]);
+    return rows;
+  };
 
   if (req.body?.house === true) {
     // "A casa ganha": ninguém acertou. Cria (se ainda não existir) uma opção
     // oculta pra essa enquete e "vota" nela só pelas contas da casa escolhidas.
     const ids = Array.isArray(req.body?.houseIds) ? req.body.houseIds.map(String) : [];
     if (!ids.length) return res.status(400).json({ error: 'Escolha pelo menos uma conta da casa.' });
-    const { rows: house } = await q('select id from users where is_house and id = any($1::text[])', [ids]);
+    const house = await pickHouse(ids);
     if (!house.length) {
       return res.status(400).json({ error: 'Nenhuma das contas escolhidas existe mais. Recarregue a página.' });
     }
-    optionId = await tx(async (c) => {
-      const existing = await c.query('select id from poll_options where poll_id = $1 and is_house limit 1', [req.params.id]);
-      if (existing.rowCount) return existing.rows[0].id;
-      const { rowCount } = await c.query('select 1 from polls where id = $1', [req.params.id]);
-      if (!rowCount) return null;
-      const pos = await c.query('select coalesce(max(position), -1) + 1 as n from poll_options where poll_id = $1', [req.params.id]);
-      const id = uid();
-      await c.query('insert into poll_options (id, poll_id, label, position, is_house) values ($1, $2, $3, $4, true)', [
-        id, req.params.id, 'Casa', pos.rows[0].n,
-      ]);
-      return id;
-    });
+    optionId = await ensureHouseOption(req.params.id);
     if (!optionId) return notFound(res);
-    for (const h of house) {
-      await q(
-        `insert into votes (poll_id, user_id, option_id) values ($1, $2, $3)
-         on conflict (poll_id, user_id) do update set option_id = excluded.option_id, voted_at = now()`,
-        [req.params.id, h.id, optionId]
-      );
+    // Enquete com a opção "Casa": só as contas escolhidas ficam com o voto
+    if (houseFlag) {
+      await q('delete from votes where poll_id = $1 and user_id in (select id from users where is_house) and not (user_id = any($2::text[]))', [req.params.id, house.map((h) => h.id)]);
     }
+    for (const h of house) await upsertHouseVote(req.params.id, h.id, optionId);
   } else {
     optionId = String(req.body?.optionId ?? '');
     const { rowCount: valid } = await q(
@@ -1282,6 +1308,16 @@ app.post('/api/admin/polls/:id/resolve', requireAdmin, wrap(async (req, res) => 
       [optionId, req.params.id]
     );
     if (!valid) return res.status(400).json({ error: 'Opção inválida.' });
+    // Enquete com a opção "Casa": as contas escolhidas erram (voto na opção oculta, que
+    // nunca é a certa aqui) — perdem a sequência e o erro entra no histórico.
+    if (houseFlag) {
+      const losers = await pickHouse(req.body?.houseLoseIds);
+      await q('delete from votes where poll_id = $1 and user_id in (select id from users where is_house)', [req.params.id]);
+      if (losers.length) {
+        const houseOpt = await ensureHouseOption(req.params.id);
+        for (const h of losers) await upsertHouseVote(req.params.id, h.id, houseOpt);
+      }
+    }
   }
 
   const prev = await q('select correct_option_id from polls where id = $1', [req.params.id]);

@@ -105,3 +105,11 @@ Na aba **👥 Usuários**: busque alguém e use **± Pontos** para somar ou subt
 ## Tema claro/escuro
 
 O botão 🌙/☀️ no topo do site (e do painel admin) alterna entre o tema claro e o escuro. Na primeira visita o tema segue o do aparelho; depois que a pessoa clica, a escolha fica salva naquele navegador (`localStorage`, chave `theme`) e vale para o site e para o admin. O arquivo `public/theme.js` aplica o tema antes da página aparecer, para não piscar. As cores dos dois temas ficam nas variáveis do começo de `public/style.css` (`:root` e `:root[data-theme="dark"]`): para ajustar uma cor do escuro, mude só ali.
+
+## Enquete com a opção Casa
+
+No formulário da enquete há o checkbox **🏠 Casa**. Nessas enquetes as contas da casa participam do resultado:
+
+- **Uma opção acerta** (Confirmar resposta certa): antes de confirmar abre o menu **Qual casa erra?**. As contas marcadas erram — perdem a sequência e o erro entra no histórico; as desmarcadas não participam (pode confirmar sem marcar nenhuma). Ao atualizar a resposta, o menu abre de novo e substitui a escolha anterior.
+- **A casa ganha** (🏠 A casa ganha): as contas escolhidas somam o acerto e mantêm a sequência; as outras contas da casa ficam de fora.
+- Enquetes sem o checkbox funcionam como antes, sem menu.

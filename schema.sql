@@ -51,6 +51,8 @@ alter table polls add column if not exists topic_id text references poll_topics(
 update polls set topic_id = 'geral'
 where topic_id is null and exists (select 1 from poll_topics where id = 'geral');
 
+alter table polls add column if not exists house boolean not null default false; -- enquete com as contas da casa participando
+
 create table if not exists poll_options (
   id       text primary key,
   poll_id  text not null references polls(id) on delete cascade,
