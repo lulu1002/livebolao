@@ -1436,10 +1436,10 @@ async function setResetAt(key, value) {
   );
 }
 
-/* Pódio da semana: top 3 por posição (empates dividem o lugar), sem contas da
-   casa e sem quem não pontuou. A lista já vem ordenada de computeWeeklyStandings. */
+/* Pódio da semana: top 3 por posição (empates dividem o lugar), contas da casa
+   incluídas, sem quem não pontuou. A lista já vem ordenada de computeWeeklyStandings. */
 function buildPodium(list) {
-  const eligible = list.filter((r) => !r.isHouse && r.points > 0);
+  const eligible = list.filter((r) => r.points > 0);
   const podium = [];
   let pos = 0;
   let prev = null;
@@ -1494,7 +1494,7 @@ app.post('/api/admin/ranking/reset-general', requireAdmin, wrap(async (req, res)
 async function fetchHall() {
   const { rows } = await q(
     `select w.id, w.started_at, w.ended_at, p.place, p.points, p.hits,
-            u.id as user_id, u.display_name, u.login, u.avatar_url
+            u.id as user_id, u.display_name, u.login, u.avatar_url, u.is_house
      from hall_weeks w
      join hall_places p on p.week_id = w.id
      join users u on u.id = p.user_id and not u.banned
@@ -1511,7 +1511,7 @@ async function fetchHall() {
     }
     w.places.push({
       place: r.place, userId: r.user_id, name: r.display_name, login: r.login,
-      avatar: r.avatar_url, points: r.points, hits: r.hits,
+      avatar: r.avatar_url, points: r.points, hits: r.hits, isHouse: r.is_house,
     });
   }
   return weeks.slice(0, 100);

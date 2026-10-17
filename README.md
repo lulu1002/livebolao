@@ -88,7 +88,7 @@ No site, a barra de tópicos só aparece quando há enquetes em mais de um tópi
 
 ## Hall da fama
 
-Ao clicar em **Zerar semanal** (ou **Zerar geral**, que zera o semanal junto), o servidor grava o pódio da semana — 1º ao 3º lugar, com pontos e acertos — antes de mover a data de corte. Empatados dividem o lugar, contas da casa e quem não pontuou ficam de fora, e semana em que ninguém pontuou não grava nada. O histórico aparece na aba **Hall da fama** do ranking e no perfil de cada pessoa, e nenhum "zerar" apaga o hall. No painel admin (aba 🏆 Hall) dá para **mostrar/ocultar** o hall para os participantes e excluir uma semana gravada por engano. A conquista **Campeão semanal** (tipo "Títulos semanais", níveis 1, 3 e 5 por padrão, editáveis em Conquistas) conta as vezes em 1º lugar. O pódio só começa a ser gravado a partir do primeiro "Zerar" depois deste deploy.
+Ao clicar em **Zerar semanal** (ou **Zerar geral**, que zera o semanal junto), o servidor grava o pódio da semana — 1º ao 3º lugar, com pontos e acertos — antes de mover a data de corte. Empatados dividem o lugar, contas da casa também entram, só quem não pontuou fica de fora, e semana em que ninguém pontuou não grava nada. O histórico aparece na aba **Hall da fama** do ranking e no perfil de cada pessoa, e nenhum "zerar" apaga o hall. No painel admin (aba 🏆 Hall) dá para **mostrar/ocultar** o hall para os participantes e excluir uma semana gravada por engano. A conquista **Campeão semanal** (tipo "Títulos semanais", níveis 1, 3 e 5 por padrão, editáveis em Conquistas) conta as vezes em 1º lugar. O pódio só começa a ser gravado a partir do primeiro "Zerar" depois deste deploy.
 
 
 ## Prêmios únicos

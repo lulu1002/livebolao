@@ -507,7 +507,7 @@
           const me = state.user && state.user.id === p.userId;
           return h('li', { class: me ? 'me' : null },
             h('span', { class: 'pos' }, MEDAL[p.place]),
-            avatarEl(p.name, p.avatar),
+            avatarEl(p.name, p.avatar, '', p.isHouse),
             h('span', {},
               h('span', { class: 'nm-row' },
                 h('a', { class: 'nm', href: `#perfil/${p.userId}` }, p.name + (me ? ' (você)' : ''))),
