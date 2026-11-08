@@ -7,6 +7,28 @@ Enquetes com palpites e ranking. O admin publica a enquete, os participantes ent
 - Stack: Node.js + Express + Postgres (Supabase), frontend em HTML/CSS/JS puro
 - No ranking aparece o nome e a foto da conta Twitch de cada participante
 
+## Enquetes com odd (apostas)
+
+Ao criar uma enquete no admin, marque **Enquete com odd** (cada enquete decide; dá para misturar com enquetes normais).
+
+- O participante escolhe uma opção e aposta pontos do **ranking geral** (saldo = total de pontos menos o que já está apostado em enquetes sem resultado). Pode trocar a aposta até a votação encerrar (a menos que a Trava de voto esteja ligada).
+- Odd = total de apostadores ÷ apostadores na opção. Quem acerta recebe `aposta × odd` (ganho líquido = isso − aposta); quem erra perde a aposta. Pouca gente na opção certa = prêmio alto; muita gente = prêmio baixo; todo mundo na mesma opção = devolve a aposta.
+- O admin pode definir, por enquete, uma **aposta máxima** e um **ganho máximo** por pessoa (campos opcionais; em branco = sem limite). O ganho máximo limita o lucro líquido de quem acertar.
+- Se a casa ganhar ("ninguém acertou"), os apostadores perdem a aposta e as contas da casa escolhidas recebem os "Pontos por acerto" da enquete.
+- O ganho/perda entra no ranking geral e no semanal; reabrir ou apagar a enquete mantendo/zerando pontos funciona igual às enquetes normais.
+- Só dá para ligar/desligar a odd de uma enquete antes do primeiro voto.
+- O banco é atualizado sozinho no deploy (colunas `polls.odds`, `polls.max_stake`, `polls.max_win`, `votes.stake`, `awards.gain`).
+
+## Trava de voto
+
+Na aba Criar do admin, a caixa **Não deixar o participante trocar o voto** (desligada por padrão) impede qualquer troca depois do primeiro voto ou aposta, em todas as enquetes.
+
+## Painel de testes
+
+Na aba **🧪 Testes** do admin você cria contas fictícias (com pontos iniciais), faz cada uma votar ou apostar, faz todas votarem aleatoriamente de uma vez e dá ±100 pontos. Elas aparecem no ranking com 🧪, não levam prêmio único nem entram no pódio, e **Apagar contas de teste** remove tudo delas. Evite zerar o ranking semanal com contas de teste ativas.
+
+A aba é protegida por uma segunda senha, a variável `TESTS_PASSWORD` (o Blueprint do Render gera uma; em dev o padrão é `teste123`). Sem ela em produção, a aba fica trancada. O acesso fecha sozinho após 1 hora, ou pelo botão “Trancar aba”.
+
 ## 1. Supabase (banco de dados)
 
 1. Crie um projeto em https://supabase.com.

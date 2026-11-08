@@ -669,3 +669,10 @@ dialog::backdrop { background: var(--backdrop); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; scroll-behavior: auto !important; }
 }
+
+/* ---------- Enquetes com odd (apostas) ---------- */
+.odd { color: var(--accent, #c8860a); font-variant-numeric: tabular-nums; }
+.bet-box { margin-top: 0.8rem; padding: 0.7rem 0.8rem; border: 1px dashed currentColor; border-radius: 10px; display: grid; gap: 0.45rem; }
+.bet-box .note { margin: 0; }
+.bet-row { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+.bet-input { width: 7.5rem; padding: 0.45rem 0.6rem; font: inherit; border-radius: 8px; border: 1px solid currentColor; background: transparent; color: inherit; }

@@ -48,6 +48,7 @@
         <button type="button" role="tab" id="atab-prizes" aria-controls="apane-prizes" aria-selected="false">🏅 Prêmio</button>
         <button type="button" role="tab" id="atab-hall" aria-controls="apane-hall" aria-selected="false">🏆pódio semanal</button>
         <button type="button" role="tab" id="atab-users" aria-controls="apane-users" aria-selected="false">👥 Os meliantes </button>
+        <button type="button" role="tab" id="atab-tests" aria-controls="apane-tests" aria-selected="false">🧪 Testes</button>
         <button type="button" role="tab" id="atab-backup" aria-controls="apane-backup" aria-selected="false">Backup</button>
       </nav>
 
@@ -59,6 +60,11 @@
             <label class="aopt"><input type="radio" name="mode" value="replace"><span>Substituir a enquete do mesmo tópico na página principal</span></label>
             <label class="aopt"><input type="radio" name="mode" value="accumulate"><span>Acumular com as anteriores</span></label>
             <span class="hint">Enquetes substituídas saem da página, mas continuam aqui no painel e valem pontos quando você define a resposta.</span>
+          </fieldset>
+          <fieldset class="modes">
+            <legend>Trava de voto</legend>
+            <label class="aopt"><input type="checkbox" id="lock-votes"><span>🔒 Não deixar o participante trocar o voto: votou, está votado</span></label>
+            <span class="hint">Vale para todas as enquetes (normais e com odd), inclusive as que já têm votos. Desligado, dá para trocar o voto até a votação encerrar.</span>
           </fieldset>
           <fieldset class="modes">
             <legend>Notificações</legend>
@@ -94,6 +100,21 @@
             <div class="field">
               <label class="aopt"><input type="checkbox" id="f-house"><span>🏠 Casa: as contas da casa participam desta enquete</span></label>
               <span class="hint">Ao confirmar uma resposta, você escolhe quais contas da casa erram (perdem a sequência e ganham o erro no histórico). Se a casa ganhar, as contas escolhidas somam o acerto e mantêm a sequência.</span>
+            </div>
+            <div class="field">
+              <label class="aopt"><input type="checkbox" id="f-odds"><span>🎲 Enquete com odd: o participante aposta pontos do ranking</span></label>
+              <span class="hint" id="f-odds-hint">Quem acerta recebe aposta × odd (total de apostadores ÷ apostadores na opção); quem erra perde a aposta. Os “Pontos por acerto” acima só valem se a casa ganhar. Só dá para ligar ou desligar antes do primeiro voto.</span>
+            </div>
+            <div id="f-odds-limits" hidden>
+              <div class="field">
+                <label for="f-max-stake">Aposta máxima por pessoa (pontos, opcional)</label>
+                <input id="f-max-stake" type="number" min="1" step="1" placeholder="Sem limite">
+              </div>
+              <div class="field">
+                <label for="f-max-win">Ganho máximo por pessoa (pontos, opcional)</label>
+                <input id="f-max-win" type="number" min="1" step="1" placeholder="Sem limite">
+                <span class="hint">Teto do lucro líquido de quem acertar. Em branco, o prêmio é só aposta × odd.</span>
+              </div>
             </div>
             <div class="field" id="f-notify-field">
               <label class="aopt"><input type="checkbox" id="f-notify" checked><span>Notificar os inscritos ao publicar esta enquete</span></label>
@@ -281,6 +302,48 @@
           <input id="user-search" type="search" placeholder="Nome ou login" autocomplete="off">
         </div>
         <div id="user-list" class="ach-admin-list"></div>
+      </section>
+      </div>
+
+      <div id="apane-tests" role="tabpanel" aria-labelledby="atab-tests" hidden>
+      <section class="panel narrow-md" id="tests-panel">
+        <h2>🧪 Painel de testes</h2>
+        <form id="tests-lock" hidden>
+          <p class="hint" id="tests-lock-hint">Área protegida. Digite a senha da aba Testes (variável <code>TESTS_PASSWORD</code> no servidor). O acesso se fecha sozinho depois de 1 hora.</p>
+          <div class="field">
+            <label for="tests-pass">Senha da aba Testes</label>
+            <input id="tests-pass" type="password" autocomplete="off">
+          </div>
+          <p class="error" id="tests-lock-error" role="alert"></p>
+          <button class="btn" type="submit">Entrar</button>
+        </form>
+        <div id="tests-body" hidden>
+        <p class="hint">Crie participantes fictícios para testar votos, apostas, odds e ranking sozinho. Eles aparecem no ranking com 🧪, mas não ganham prêmio único nem entram no pódio semanal. Use “Apagar contas de teste” no fim: some tudo deles (votos, pontos, emblemas).</p>
+        <div class="field">
+          <label for="test-count">Criar contas de teste</label>
+          <div class="actions">
+            <input id="test-count" type="number" min="1" max="20" value="5" style="max-width:6rem" aria-label="Quantidade">
+            <input id="test-start" type="number" min="0" max="100000" value="100" style="max-width:7rem" aria-label="Pontos iniciais">
+            <button class="btn" id="test-create" type="button">Criar</button>
+          </div>
+          <span class="hint">Quantidade (até 20) e pontos iniciais de cada conta.</span>
+        </div>
+        <div id="test-list" class="alist"></div>
+        <h3>Votar / apostar pelas contas de teste</h3>
+        <div class="field"><label for="test-poll">Enquete (só abertas e visíveis)</label><select id="test-poll"></select></div>
+        <div class="field"><label for="test-option">Opção</label><select id="test-option"></select></div>
+        <div class="field"><label for="test-account">Conta</label><select id="test-account"></select></div>
+        <div class="field" id="test-stake-field"><label for="test-stake">Pontos da aposta (enquete com odd)</label><input id="test-stake" type="number" min="1" step="1" value="10"></div>
+        <div class="actions">
+          <button class="btn" id="test-vote" type="button">Votar com esta conta</button>
+          <button class="btn ghost" id="test-random" type="button">Todas as contas votam aleatório</button>
+        </div>
+        <p class="error" id="test-error" role="alert"></p>
+        <div class="actions">
+          <button class="btn ghost" id="test-clear" type="button">Apagar contas de teste</button>
+          <button class="btn ghost" id="tests-relock" type="button">Trancar aba</button>
+        </div>
+        </div>
       </section>
       </div>
 

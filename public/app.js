@@ -9,6 +9,9 @@
     polls: [],
     topics: [],
     pollTopic: null,
+    lockVotes: false,
+    balance: null,
+    bet: {}, // rascunho da aposta por enquete: { [pollId]: { optionId, stake } }
     pollsError: null,
     loaded: false,
     ranking: null,
@@ -227,6 +230,8 @@
       const data = await api('/api/polls');
       state.polls = data.polls;
       state.topics = data.topics || [];
+      state.lockVotes = Boolean(data.lockVotes);
+      state.balance = data.balance == null ? null : data.balance;
       state.pollsError = null;
     } catch (e) {
       state.pollsError = e.message;
@@ -247,12 +252,18 @@
         return h('p', { class: 'note' }, 'Entre com a Twitch para registrar seu palpite. ',
           h('a', { class: 'linkish', href: '/auth/twitch' }, 'Entrar'));
       }
+      if (p.odds) return null; // o quadro de aposta já explica tudo
       return h('p', { class: 'note' },
-        p.myVote ? 'Palpite registrado. Você pode trocar até a votação encerrar.' : 'Toque em uma opção para dar seu palpite.');
+        p.myVote ? (state.lockVotes ? 'Palpite registrado. Não é possível trocar o voto.' : 'Palpite registrado. Você pode trocar até a votação encerrar.') : 'Toque em uma opção para dar seu palpite.');
     }
     if (!state.user) return null;
     if (!p.myVote) return h('p', { class: 'note' }, 'Você não votou nesta enquete.');
     if (p.status === 'closed') return h('p', { class: 'note' }, 'Palpite registrado. Aguardando o resultado.');
+    if (p.odds && p.myStake != null) {
+      if (p.houseWon) return h('p', { class: 'note miss' }, `Ninguém acertou: 🏠 a casa ficou com a sua aposta (−${p.myStake}).`);
+      if (p.myHit) return h('p', { class: 'note hit' }, `Você acertou: apostou ${p.myStake}, ganhou +${p.myNet} ${Math.abs(p.myNet) === 1 ? 'ponto' : 'pontos'}.`);
+      return h('p', { class: 'note miss' }, `Você errou: perdeu ${p.myStake} ${p.myStake === 1 ? 'ponto' : 'pontos'} da aposta.`);
+    }
     if (p.houseWon) return h('p', { class: 'note miss' }, 'Ninguém acertou: 🏠 a casa levou os pontos desta vez.');
     if (p.myPoints === null) {
       return h('p', { class: p.myHit ? 'note hit' : 'note miss' },
@@ -264,9 +275,70 @@
     return h('p', { class: 'note miss' }, 'Você errou desta vez. 0 pontos.');
   }
 
+  const oddLabel = (n) => Number(n).toFixed(2).replace('.', ',');
+
+  // Clicar numa opção de enquete com odd só escolhe: a aposta é confirmada no quadro abaixo
+  function pickBet(p, optionId) {
+    if (!state.user) { toast('Entre com a Twitch para apostar.'); return; }
+    if (state.lockVotes && p.myVote) { toast('Você já apostou e não pode trocar.', true); return; }
+    const prev = state.bet[p.id];
+    state.bet[p.id] = { optionId, stake: prev ? prev.stake : (p.myStake || '') };
+    renderPolls();
+  }
+
+  function betBox(p) {
+    if (p.status !== 'open' || !state.user) return null;
+    const draft = state.bet[p.id];
+    const bal = state.balance == null ? 0 : state.balance + (p.myStake || 0); // a aposta atual volta pro saldo ao trocar
+    const free = p.maxStake ? Math.min(bal, p.maxStake) : bal; // teto da enquete
+    const lines = [
+      h('p', { class: 'note' }, `Saldo para apostar: `, h('b', {}, `${state.balance == null ? '…' : state.balance} pts`),
+        p.myStake != null ? ` · Sua aposta atual: ${p.myStake} pts` : ''),
+    ];
+    if (p.maxStake || p.maxWin) {
+      lines.push(h('p', { class: 'note' }, [p.maxStake ? `Aposta máxima: ${p.maxStake} pts` : null, p.maxWin ? `Ganho máximo: +${p.maxWin} pts` : null].filter(Boolean).join(' · ')));
+    }
+    if (state.lockVotes && p.myVote) {
+      lines.push(h('p', { class: 'note' }, 'Aposta registrada. Não é possível trocar.'));
+    } else if (!draft) {
+      lines.push(h('p', { class: 'note' }, p.myVote
+        ? 'Toque em uma opção para trocar sua aposta.'
+        : 'Toque em uma opção, depois diga quantos pontos quer apostar. Quanto menos gente na opção certa, maior o prêmio.'));
+    } else {
+      const opt = p.options.find((o) => o.id === draft.optionId);
+      const stake = Number(draft.stake) || 0;
+      const input = h('input', {
+        type: 'number', min: 1, max: free, step: 1, inputmode: 'numeric', class: 'bet-input',
+        value: draft.stake, placeholder: 'Pontos', 'data-key': `${p.id}:stake`, 'aria-label': 'Pontos da aposta',
+        oninput: (e) => { draft.stake = e.target.value; update(); },
+      });
+      const preview = h('p', { class: 'note' });
+      const update = () => {
+        const n = Number(draft.stake);
+        preview.textContent = Number.isInteger(n) && n > 0
+          ? `Se acertar com a odd de agora (${oddLabel(opt.odd)}x): +${p.maxWin ? Math.min(Math.round(n * opt.odd) - n, p.maxWin) : Math.round(n * opt.odd) - n} pts. Se errar: −${n} pts.`
+          : 'A odd muda conforme mais gente aposta.';
+      };
+      update();
+      const quick = [['¼', 0.25], ['½', 0.5], ['Tudo', 1]].map(([label, f]) => h('button', {
+        type: 'button', class: 'btn ghost small',
+        onclick: () => { draft.stake = String(Math.max(0, Math.floor(free * f))); input.value = draft.stake; update(); },
+      }, label));
+      lines.push(
+        h('div', { class: 'bet-row' }, input, ...quick),
+        preview,
+        h('div', { class: 'bet-row' },
+          h('button', { class: 'btn small', type: 'button', disabled: !(stake > 0), onclick: () => vote(p, draft.optionId, draft.stake) },
+            p.myVote ? 'Trocar aposta' : 'Apostar'),
+          h('button', { class: 'btn ghost small', type: 'button', onclick: () => { delete state.bet[p.id]; renderPolls(); } }, 'Cancelar')));
+    }
+    return h('div', { class: 'bet-box' }, lines);
+  }
+
   function renderOption(p, o) {
     const isOpen = p.status === 'open';
-    const mine = p.myVote === o.id;
+    const draft = state.bet[p.id];
+    const mine = p.odds && isOpen && draft ? draft.optionId === o.id : p.myVote === o.id;
     const correct = p.status === 'resolved' && p.correctOptionId === o.id;
     const wrong = p.status === 'resolved' && mine && !correct;
     const cls = ['opt', mine && 'is-mine', correct && 'is-correct', wrong && 'is-wrong'].filter(Boolean).join(' ');
@@ -276,11 +348,14 @@
       class: cls,
       role: 'radio',
       'aria-checked': String(mine),
-      disabled: !isOpen,
+      disabled: !isOpen || (state.lockVotes && Boolean(p.myVote)),
       'data-key': `${p.id}:${o.id}`,
-      onclick: () => vote(p, o.id),
+      onclick: () => (p.odds ? pickBet(p, o.id) : vote(p, o.id)),
     }, h('span', { class: 'box' }, xMark()), h('span', { class: 'opt-text' }, o.text));
 
+    if (p.odds && isOpen) {
+      btn.append(h('span', { class: 'opt-meta' }, `${o.votes} ${o.votes === 1 ? 'aposta' : 'apostas'} · `, h('b', { class: 'odd' }, `${oddLabel(o.odd)}x`)));
+    }
     if (!isOpen) {
       const total = p.totalVotes || 0;
       const pct = total ? Math.round((o.votes / total) * 100) : 0;
@@ -297,8 +372,9 @@
     return h('article', { class: 'ticket' },
       h('div', { class: 'stub' },
         h('div', { class: 'pts' },
-          h('span', { class: 'pts-n' }, p.points),
-          h('span', { class: 'pts-l' }, p.points === 1 ? 'ponto' : 'pontos')),
+          p.odds
+            ? [h('span', { class: 'pts-n' }, '🎲'), h('span', { class: 'pts-l' }, 'odd')]
+            : [h('span', { class: 'pts-n' }, p.points), h('span', { class: 'pts-l' }, p.points === 1 ? 'ponto' : 'pontos')]),
         h('span', { class: `pill ${p.status}` }, statusText),
         p.houseWon ? h('span', { class: 'pill house' }, '🏠 Casa venceu') : null,
         h('div', { class: 'when' }, whenLabel(p))),
@@ -306,6 +382,7 @@
         h('h2', {}, p.title),
         p.description ? h('p', { class: 'desc' }, p.description) : null,
         h('div', { class: 'opts', role: 'radiogroup', 'aria-label': p.title }, p.options.map((o) => renderOption(p, o))),
+        p.odds ? betBox(p) : null,
         noteFor(p)));
   }
 
@@ -368,16 +445,18 @@
     }
   }
 
-  async function vote(p, optionId) {
+  async function vote(p, optionId, stake) {
     if (!state.user) {
       toast('Entre com a Twitch para dar seu palpite.');
       return;
     }
     try {
-      const { poll } = await api(`/api/polls/${p.id}/vote`, { method: 'POST', body: { optionId } });
+      const body = p.odds ? { optionId, stake: Number(stake) } : { optionId };
+      const { poll, balance } = await api(`/api/polls/${p.id}/vote`, { method: 'POST', body });
       state.polls = state.polls.map((x) => (x.id === poll.id ? poll : x));
+      if (p.odds) { delete state.bet[p.id]; if (balance != null) state.balance = balance; }
       renderPolls();
-      toast('Palpite salvo');
+      toast(p.odds ? 'Aposta registrada' : 'Palpite salvo');
     } catch (e) {
       toast(e.message, true);
       if (e.status === 401) {
@@ -580,14 +659,14 @@
 
   function historyItem(i) {
     const detail = i.chosen
-      ? `Palpite: ${i.chosen}${i.correct ? ` · Certa: ${i.correct}` : ''}`
+      ? `Palpite: ${i.chosen}${i.stake ? ` (${i.stake} pts)` : ''}${i.correct ? ` · Certa: ${i.correct}` : ''}`
       : 'Rodada guardada';
     return h('li', {},
       h('div', {},
         h('span', { class: 'nm' }, i.title),
         h('span', { class: 'hits' }, detail)),
       h('div', { class: 'hist-res' },
-        h('span', { class: `pill ${i.hit ? 'hit' : 'miss'}` }, i.hit ? `Acertou +${i.points}` : 'Errou'),
+        h('span', { class: `pill ${i.hit ? 'hit' : 'miss'}` }, i.hit ? `Acertou +${i.points}` : (i.points < 0 ? `Errou ${i.points}` : 'Errou')),
         i.bonus ? h('span', { class: 'pill bonus' }, `+${i.bonus} bônus`) : null));
   }
 

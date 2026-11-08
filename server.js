@@ -24,6 +24,7 @@ if (!/^[A-Za-z0-9_-]{1,64}$/.test(ADMIN_PATH) || ['api', 'healthz'].includes(ADM
   ADMIN_PATH = 'admin';
 }
 const ADMIN_SESSION_MS = 12 * 60 * 60 * 1000; // 12 horas
+const TESTS_SESSION_MS = 60 * 60 * 1000; // a aba Testes fecha sozinha depois de 1 hora
 const TWITCH_AVATAR_PREFIX = 'https://static-cdn.jtvnw.net/';
 
 let ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
@@ -32,6 +33,13 @@ if (!ADMIN_PASSWORD && !IS_PROD) {
   console.warn('[aviso] ADMIN_PASSWORD não definida. Usando "admin123" (só para desenvolvimento).');
 }
 if (!ADMIN_PASSWORD) console.error('[erro] ADMIN_PASSWORD não definida: o painel admin está desativado.');
+// Senha extra da aba Testes (além do login do admin). Sem ela em produção, a aba fica trancada.
+let TESTS_PASSWORD = process.env.TESTS_PASSWORD || '';
+if (!TESTS_PASSWORD && !IS_PROD) {
+  TESTS_PASSWORD = 'teste123';
+  console.warn('[aviso] TESTS_PASSWORD não definida. Usando "teste123" (só para desenvolvimento).');
+}
+if (!TESTS_PASSWORD) console.warn('[aviso] TESTS_PASSWORD não definida: a aba Testes do admin fica trancada.');
 if (!DATABASE_URL) {
   console.error('[erro] DATABASE_URL não definida. Use a connection string do Supabase (veja o README).');
   process.exit(1);
@@ -189,6 +197,9 @@ function rowToPoll(r) {
     correctOptionId: r.correct_option_id,
     topicId: r.topic_id,
     house: Boolean(r.house),
+    odds: Boolean(r.odds),
+    maxStake: r.max_stake,
+    maxWin: r.max_win,
     createdAt: iso(r.created_at),
     resolvedAt: iso(r.resolved_at),
     options: [],
@@ -215,7 +226,7 @@ const houseWon = (p) => p.options.some((o) => o.isHouse && o.id === p.correctOpt
 async function fetchVotes(pollIds) {
   if (!pollIds.length) return new Map();
   const { rows } = await q(
-    `select v.poll_id, v.option_id, v.user_id, u.display_name
+    `select v.poll_id, v.option_id, v.user_id, v.stake, u.display_name
      from votes v join users u on u.id = v.user_id
      where v.poll_id = any($1::text[])`,
     [pollIds]
@@ -235,6 +246,36 @@ async function getFlag(key) {
 }
 const getNotifyEnabled = () => getFlag('notify_enabled'); // aviso de enquete nova
 
+/* Odd de uma opção = apostadores no total / apostadores nessa opção (mín. 1,00x).
+   Só contam votos com aposta (stake): as contas da casa não entram na conta. */
+const oddOf = (total, onOption) => (onOption > 0 ? total / onOption : null);
+const payoutOf = (stake, total, onOption) => Math.round((stake * total) / onOption);
+// Ganho líquido já com o teto de ganho da enquete (maxWin nulo = sem teto)
+const netWin = (stake, total, onOption, maxWin) => {
+  const net = payoutOf(stake, total, onOption) - stake;
+  return maxWin ? Math.min(net, maxWin) : net;
+};
+
+// Ganho líquido de um voto numa enquete resolvida (aliases: v = votes, p = polls).
+// Sem aposta: regra antiga (p.points se acertou). Com aposta: acertou = stake*odd - stake; errou = -stake.
+const GAIN_SQL = `case
+    when v.stake is null then (case when v.option_id = p.correct_option_id then p.points else 0 end)
+    when v.option_id = p.correct_option_id then
+      least(
+        round(v.stake::numeric
+          * (select count(*) from votes t where t.poll_id = v.poll_id and t.stake is not null)
+          / (select count(*) from votes t2 where t2.poll_id = v.poll_id and t2.stake is not null and t2.option_id = v.option_id)
+        )::int - v.stake,
+        coalesce(p.max_win, 2147483647))
+    else -v.stake
+  end`;
+
+// Trava de voto: ligada, quem já votou numa enquete não pode trocar nem refazer a aposta. Desligada por padrão.
+async function getLockVotes() {
+  const { rows } = await q("select value from settings where key = 'lock_votes'");
+  return Boolean(rows[0] && rows[0].value === '1');
+}
+
 async function getMode() {
   const { rows } = await q("select value from settings where key = 'mode'");
   return rows[0] && rows[0].value === 'accumulate' ? 'accumulate' : 'replace';
@@ -251,7 +292,19 @@ function pollStatus(p) {
 function publicPoll(p, votes, userId) {
   const status = pollStatus(p);
   const mine = userId ? votes.find((v) => v.user_id === userId) : null;
-  const showResults = status !== 'open';
+  // Enquete com odd mostra as contagens desde o início (a odd depende delas)
+  const showResults = status !== 'open' || p.odds;
+  const bets = p.odds ? votes.filter((v) => v.stake != null) : [];
+  const countOn = (id) => bets.filter((v) => v.option_id === id).length;
+  const myBet = p.odds && mine && mine.stake != null ? mine : null;
+  // Ganho líquido de quem apostou (só depois do resultado)
+  let myNet = null;
+  if (p.odds && status === 'resolved' && myBet) {
+    myNet = myBet.option_id === p.correctOptionId
+      ? netWin(myBet.stake, bets.length, countOn(myBet.option_id), p.maxWin)
+      : -myBet.stake;
+  }
+  const round2 = (n) => Math.round(n * 100) / 100;
   return {
     id: p.id,
     title: p.title,
@@ -261,19 +314,33 @@ function publicPoll(p, votes, userId) {
     topicId: p.topicId,
     status,
     createdAt: p.createdAt,
-    totalVotes: votes.length,
-    options: visibleOptions(p).map((o) => ({
-      id: o.id,
-      text: o.text,
-      votes: showResults ? votes.filter((v) => v.option_id === o.id).length : null,
-    })),
+    totalVotes: p.odds ? bets.length : votes.length,
+    odds: Boolean(p.odds),
+    maxStake: p.odds ? p.maxStake : null,
+    maxWin: p.odds ? p.maxWin : null,
+    options: visibleOptions(p).map((o) => {
+      const base = {
+        id: o.id,
+        text: o.text,
+        votes: showResults ? (p.odds ? countOn(o.id) : votes.filter((v) => v.option_id === o.id).length) : null,
+      };
+      if (p.odds) {
+        // Odd que a pessoa receberia se apostasse agora nesta opção (sem contar a aposta atual dela)
+        const total = bets.length - (myBet ? 1 : 0);
+        const on = countOn(o.id) - (myBet && myBet.option_id === o.id ? 1 : 0);
+        base.odd = round2(Math.max(1, (total + 1) / (on + 1)));
+      }
+      return base;
+    }),
     myVote: mine ? mine.option_id : null,
+    myStake: myBet ? myBet.stake : null,
+    myNet,
     houseWon: status === 'resolved' && houseWon(p),
     correctOptionId: status === 'resolved' && !houseWon(p) ? p.correctOptionId : null,
     myHit: status === 'resolved' && mine ? mine.option_id === p.correctOptionId : null,
     myPoints:
       status === 'resolved' && mine && p.counted
-        ? (mine.option_id === p.correctOptionId ? p.points : 0)
+        ? (p.odds && myBet ? myNet : (mine.option_id === p.correctOptionId ? p.points : 0))
         : null,
   };
 }
@@ -293,6 +360,10 @@ function adminPoll(p, votes) {
     visible: p.visible,
     counted: p.counted,
     house: p.house,
+    odds: p.odds,
+    maxStake: p.maxStake,
+    maxWin: p.maxWin,
+    pool: p.odds ? votes.reduce((n, v) => n + (v.stake || 0), 0) : null,
     correctOptionId: p.correctOptionId,
     totalVotes: votes.length,
     houseWon: houseWon(p),
@@ -300,7 +371,7 @@ function adminPoll(p, votes) {
     options: visibleOptions(p).map((o) => ({
       id: o.id,
       text: o.text,
-      voters: votes.filter((v) => v.option_id === o.id).map((v) => v.display_name),
+      voters: votes.filter((v) => v.option_id === o.id).map((v) => (v.stake != null ? `${v.display_name} (${v.stake} pts)` : v.display_name)),
     })),
   };
 }
@@ -400,7 +471,7 @@ async function syncPrizes(list, openPrizes, removed, reachByUser) {
   const blocked = new Set(removed.map((r) => `${r.prize_id}:${r.user_id}`));
   for (const pz of openPrizes) {
     const cands = list
-      .filter((s) => !s.isHouse && !blocked.has(`${pz.id}:${s.userId}`) && (reachByUser.get(s.userId) || {})[pz.id])
+      .filter((s) => !s.isHouse && !s.isTest && !blocked.has(`${pz.id}:${s.userId}`) && (reachByUser.get(s.userId) || {})[pz.id])
       .map((s) => ({ userId: s.userId, ...reachByUser.get(s.userId)[pz.id] }));
     if (!cands.length) continue;
     const when = (x) => (x ? new Date(x).getTime() : 0);
@@ -429,19 +500,21 @@ async function syncPrizes(list, openPrizes, removed, reachByUser) {
 async function computeStandings() {
   const { general: generalResetAt } = await getResetAts();
   const [users, results, rounds, rule, achDefs, titleRows, adjRows, prizeRows, removedRows] = await Promise.all([
-    q('select id, display_name, login, avatar_url, is_house from users where not banned'),
+    q('select id, display_name, login, avatar_url, is_house, is_test from users where not banned'),
     q(
-      `select r.user_id, r.poll_title, r.chosen, r.correct, r.points, r.hit, r.at
+      `select r.user_id, r.poll_title, r.chosen, r.correct, r.points, r.hit, r.at, r.gain, r.stake
        from (
          select v.user_id, p.title as poll_title, oc.label as chosen, cc.label as correct,
-                p.points, (v.option_id = p.correct_option_id) as hit, p.resolved_at as at
+                p.points, (v.option_id = p.correct_option_id) as hit, p.resolved_at as at,
+                ${GAIN_SQL} as gain, v.stake
          from votes v
          join polls p on p.id = v.poll_id
          left join poll_options oc on oc.id = v.option_id
          left join poll_options cc on cc.id = p.correct_option_id
          where p.correct_option_id is not null and p.counted and p.resolved_at > $1
          union all
-         select user_id, poll_title, null, null, points, hit, resolved_at from awards
+         select user_id, poll_title, null, null, points, hit, resolved_at,
+                coalesce(gain, case when hit then points else 0 end), null::int from awards
          where resolved_at is null or resolved_at > $1
        ) r
        order by r.at nulls first, r.poll_title`,
@@ -466,6 +539,7 @@ async function computeStandings() {
     login: u.login,
     avatar: u.avatar_url,
     isHouse: u.is_house,
+    isTest: u.is_test,
     points: 0,
     hits: 0,
     played: 0,
@@ -519,7 +593,7 @@ async function computeStandings() {
     let bonus = 0;
     if (r.hit) {
       s.hits += 1;
-      s.points += r.points;
+      s.points += r.gain;
       s.streak += 1;
       s.missStreak = 0;
       s.bestStreak = Math.max(s.bestStreak, s.streak);
@@ -533,13 +607,15 @@ async function computeStandings() {
       s.misses += 1;
       s.missStreak += 1;
       s.bestMissStreak = Math.max(s.bestMissStreak, s.missStreak);
+      s.points += r.gain; // aposta perdida (negativo); enquete normal soma 0
     }
     s.history.push({
       title: r.poll_title,
       chosen: r.chosen,
       correct: r.correct,
       hit: r.hit,
-      points: r.hit ? r.points : 0,
+      points: r.gain,
+      stake: r.stake,
       bonus,
       at: iso(r.at),
     });
@@ -584,19 +660,19 @@ async function computeStandings() {
 async function computeWeeklyStandings() {
   const { weekly: weeklyResetAt } = await getResetAts();
   const [users, totals, adj] = await Promise.all([
-    q('select id, display_name, login, avatar_url, is_house from users where not banned'),
+    q('select id, display_name, login, avatar_url, is_house, is_test from users where not banned'),
     q(
       `select r.user_id,
-              coalesce(sum(case when r.hit then r.points else 0 end), 0)::int as points,
+              coalesce(sum(r.gain), 0)::int as points,
               (count(*) filter (where r.hit))::int as hits,
               count(*)::int as played
        from (
-         select v.user_id, (v.option_id = p.correct_option_id) as hit, p.points
+         select v.user_id, (v.option_id = p.correct_option_id) as hit, ${GAIN_SQL} as gain
          from votes v
          join polls p on p.id = v.poll_id
          where p.correct_option_id is not null and p.counted and p.resolved_at > $1
          union all
-         select user_id, hit, points from awards
+         select user_id, hit, coalesce(gain, case when hit then points else 0 end) from awards
          where resolved_at is null or resolved_at > $1
        ) r
        group by r.user_id`,
@@ -615,6 +691,7 @@ async function computeWeeklyStandings() {
       login: u.login,
       avatar: u.avatar_url,
       isHouse: u.is_house,
+      isTest: u.is_test,
       points: (t ? t.points : 0) + (adjByUser.get(u.id) || 0),
       hits: t ? t.hits : 0,
       played: t ? t.played : 0,
@@ -650,7 +727,17 @@ function parsePollInput(body, requireOptions) {
     closesAt = new Date(t).toISOString();
   }
 
-  const out = { title, description, points, closesAt, house: body?.house === true };
+  // Tetos da enquete com odd (opcionais): vazio = sem limite
+  const limit = (raw) => (raw === undefined || raw === null || raw === '' ? null : Number(raw));
+  const maxStake = limit(body?.maxStake);
+  const maxWin = limit(body?.maxWin);
+  for (const v of [maxStake, maxWin]) {
+    if (v !== null && (!Number.isInteger(v) || v < 1 || v > 1000000)) {
+      return { error: 'Os tetos precisam ser números inteiros entre 1 e 1000000 (ou ficar em branco, sem limite).' };
+    }
+  }
+  const odds = body?.odds === true;
+  const out = { title, description, points, closesAt, house: body?.house === true, odds, maxStake: odds ? maxStake : null, maxWin: odds ? maxWin : null };
   if (requireOptions) {
     const raw = Array.isArray(body?.options) ? body.options : [];
     const options = [...new Set(raw.map((o) => String(o).trim()).filter(Boolean))];
@@ -770,11 +857,11 @@ async function notifyPrizeWon(userName, prizeName) {
    na enquete recebe "acertou +N" ou "dessa vez não deu". */
 async function notifyPollResult(pollId) {
   if (!PUSH_ENABLED || !(await getFlag('notify_result'))) return;
-  const { rows: pr } = await q('select title, points, correct_option_id from polls where id = $1', [pollId]);
+  const { rows: pr } = await q('select title, points, correct_option_id, odds, max_win from polls where id = $1', [pollId]);
   const poll = pr[0];
   if (!poll || !poll.correct_option_id) return;
   const { rows } = await q(
-    `select s.endpoint, s.p256dh, s.auth, (v.option_id = $2) as hit
+    `select s.endpoint, s.p256dh, s.auth, (v.option_id = $2) as hit, v.stake
      from votes v
      join push_subscriptions s on s.user_id = v.user_id
      join users u on u.id = v.user_id and not u.is_house and not u.banned
@@ -782,6 +869,24 @@ async function notifyPollResult(pollId) {
     [pollId, poll.correct_option_id]
   );
   const title = short(poll.title);
+  if (poll.odds) {
+    // Enquete com odd: cada pessoa recebe o próprio resultado (ganho/perda líquidos da aposta)
+    const c = await q(
+      `select count(*)::int as total, (count(*) filter (where option_id = $2))::int as won
+       from votes where poll_id = $1 and stake is not null`,
+      [pollId, poll.correct_option_id]
+    );
+    const { total, won } = c.rows[0];
+    for (const r of rows.filter((x) => x.stake != null)) {
+      if (r.hit) {
+        const net = netWin(r.stake, total, won, poll.max_win);
+        await sendPush([r], { title: '🎯 Você acertou!', body: `${net >= 0 ? '+' : ''}${net} pontos em \"${title}\" (odd ${oddOf(total, won).toFixed(2)}x)`, url: '/#ranking' });
+      } else {
+        await sendPush([r], { title: 'Resultado da enquete', body: `\"${title}\": você perdeu ${r.stake} pontos da aposta.`, url: '/' });
+      }
+    }
+    return;
+  }
   await sendPush(rows.filter((r) => r.hit), {
     title: '🎯 Você acertou!', body: `+${poll.points} pontos em "${title}"`, url: '/#ranking',
   });
@@ -985,26 +1090,80 @@ app.get('/api/polls', wrap(async (req, res) => {
     if (a.status === 'open' && deadline(a) !== deadline(b)) return deadline(a) - deadline(b);
     return b.createdAt.localeCompare(a.createdAt);
   });
-  res.json({ polls, topics: await fetchTopics() });
+  // Saldo só é calculado quando há enquete com odd na página e a pessoa está logada
+  const balance = u && polls.some((p) => p.odds) ? await availableBalance(u.id) : null;
+  res.json({ polls, topics: await fetchTopics(), lockVotes: await getLockVotes(), balance });
 }));
 
-app.post('/api/polls/:id/vote', requireUser, wrap(async (req, res) => {
-  const [poll] = await fetchPolls('where id = $1', [req.params.id]);
-  if (!poll || !poll.visible) return res.status(404).json({ error: 'Enquete não encontrada.' });
-  if (pollStatus(poll) !== 'open') {
-    return res.status(409).json({ error: 'A votação desta enquete já foi encerrada.' });
-  }
-  const optionId = String(req.body?.optionId ?? '');
-  if (!poll.options.some((o) => o.id === optionId)) {
-    return res.status(400).json({ error: 'Opção inválida.' });
-  }
-  await q(
-    `insert into votes (poll_id, user_id, option_id) values ($1, $2, $3)
-     on conflict (poll_id, user_id) do update set option_id = excluded.option_id, voted_at = now()`,
-    [poll.id, req.user.id, optionId]
+/* Saldo para apostar = pontos do ranking geral − o que está apostado em enquetes ainda sem resultado */
+async function lockedStakes(client, userId, exceptPollId = '') {
+  const { rows } = await client.query(
+    `select coalesce(sum(v.stake), 0)::int as n
+     from votes v join polls p on p.id = v.poll_id
+     where v.user_id = $1 and v.stake is not null and p.correct_option_id is null and p.id <> $2`,
+    [userId, exceptPollId]
   );
+  return rows[0].n;
+}
+async function availableBalance(userId, exceptPollId = '', client = pool) {
+  const st = await computeStandings();
+  const me = st.ranking.find((r) => r.userId === userId);
+  return Math.max(0, (me ? me.points : 0) - (await lockedStakes(client, userId, exceptPollId)));
+}
+
+/* Registra o voto/aposta de um usuário. Usado pelo site e pelo painel de testes do admin.
+   Devolve { status, error } em caso de recusa ou { poll } em caso de sucesso. */
+async function castVote(pollId, userId, body) {
+  const [poll] = await fetchPolls('where id = $1', [pollId]);
+  if (!poll || !poll.visible) return { status: 404, error: 'Enquete não encontrada.' };
+  if (pollStatus(poll) !== 'open') return { status: 409, error: 'A votação desta enquete já foi encerrada.' };
+  const optionId = String(body?.optionId ?? '');
+  if (!poll.options.some((o) => o.id === optionId && !o.isHouse)) return { status: 400, error: 'Opção inválida.' };
+  if (await getLockVotes()) {
+    const had = await q('select 1 from votes where poll_id = $1 and user_id = $2', [poll.id, userId]);
+    if (had.rowCount) return { status: 409, locked: true, error: 'Você já votou nesta enquete e não pode trocar o voto.' };
+  }
+  if (poll.odds) {
+    // Enquete com odd: o palpite vem junto com uma aposta em pontos do ranking
+    const stake = Number(body?.stake);
+    if (!Number.isInteger(stake) || stake < 1 || stake > 1000000) {
+      return { status: 400, error: 'Informe quantos pontos quer apostar (número inteiro, mínimo 1).' };
+    }
+    if (poll.maxStake && stake > poll.maxStake) return { status: 400, error: `A aposta máxima desta enquete é ${poll.maxStake} ${poll.maxStake === 1 ? 'ponto' : 'pontos'}.` };
+    const points = (await computeStandings()).ranking.find((r) => r.userId === userId)?.points || 0;
+    const result = await tx(async (c) => {
+      // Trava por pessoa: duas apostas ao mesmo tempo não conseguem gastar o mesmo saldo duas vezes
+      await c.query('select pg_advisory_xact_lock(hashtext($1))', [userId]);
+      const free = points - (await lockedStakes(c, userId, poll.id));
+      if (stake > free) return { free };
+      await c.query(
+        `insert into votes (poll_id, user_id, option_id, stake) values ($1, $2, $3, $4)
+         on conflict (poll_id, user_id) do update set option_id = excluded.option_id, stake = excluded.stake, voted_at = now()`,
+        [poll.id, userId, optionId, stake]
+      );
+      return { ok: true };
+    });
+    if (!result.ok) {
+      const f = Math.max(0, result.free);
+      return { status: 400, error: `Saldo insuficiente: ${f} ${f === 1 ? 'ponto disponível' : 'pontos disponíveis'} para apostar.` };
+    }
+  } else {
+    await q(
+      `insert into votes (poll_id, user_id, option_id) values ($1, $2, $3)
+       on conflict (poll_id, user_id) do update set option_id = excluded.option_id, voted_at = now()`,
+      [poll.id, userId, optionId]
+    );
+  }
   const votes = await fetchVotes([poll.id]);
-  res.json({ poll: publicPoll(poll, votes.get(poll.id) || [], req.user.id) });
+  broadcast(); // as odds mudam para todo mundo
+  return { poll, votes: votes.get(poll.id) || [] };
+}
+
+app.post('/api/polls/:id/vote', requireUser, wrap(async (req, res) => {
+  const r = await castVote(req.params.id, req.user.id, req.body);
+  if (r.error) return res.status(r.status).json({ error: r.error });
+  const balance = r.poll.odds ? await availableBalance(req.user.id) : null;
+  res.json({ poll: publicPoll(r.poll, r.votes, req.user.id), balance });
 }));
 
 app.get('/api/ranking', wrap(async (req, res) => {
@@ -1089,6 +1248,7 @@ app.get('/api/admin/polls', requireAdmin, wrap(async (req, res) => {
     notifyResult: await getFlag('notify_result'),
     notifyClosing: await getFlag('notify_closing'),
     hallVisible: await getFlag('hall_visible'),
+    lockVotes: await getLockVotes(),
     pushEnabled: PUSH_ENABLED,
   });
 }));
@@ -1113,7 +1273,7 @@ app.post('/api/admin/polls', requireAdmin, wrap(async (req, res) => {
         [topicId]
       );
     }
-    await c.query('insert into polls (id, title, description, points, closes_at, topic_id, house) values ($1, $2, $3, $4, $5, $6, $7)', [
+    await c.query('insert into polls (id, title, description, points, closes_at, topic_id, house, odds, max_stake, max_win) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)', [
       id,
       input.title,
       input.description,
@@ -1121,6 +1281,9 @@ app.post('/api/admin/polls', requireAdmin, wrap(async (req, res) => {
       input.closesAt,
       topicId,
       input.house,
+      input.odds,
+      input.maxStake,
+      input.maxWin,
     ]);
     for (const [i, o] of input.options.entries()) {
       await c.query('insert into poll_options (id, poll_id, label, position) values ($1, $2, $3, $4)', [o.id, id, o.text, i]);
@@ -1139,9 +1302,15 @@ const notFound = (res) => res.status(404).json({ error: 'Enquete não encontrada
 app.put('/api/admin/polls/:id', requireAdmin, wrap(async (req, res) => {
   const input = parsePollInput(req.body, false);
   if (input.error) return res.status(400).json({ error: input.error });
+  // Trocar entre enquete normal e com odd só é seguro enquanto ninguém votou
+  const cur = await q('select odds, (select count(*)::int from votes where poll_id = polls.id) as n from polls where id = $1', [req.params.id]);
+  if (!cur.rowCount) return notFound(res);
+  if (cur.rows[0].odds !== input.odds) {
+    if (cur.rows[0].n > 0) return res.status(409).json({ error: 'Já existem votos nesta enquete: não dá mais pra ligar ou desligar a odd.' });
+  }
   const r = await q(`update polls set title = $2, description = $3, points = $4,
       closing_notified = (closing_notified and closes_at is not distinct from $5::timestamptz), closes_at = $5,
-      house = $6
+      house = $6, odds = $7, max_stake = $8, max_win = $9
     where id = $1`, [
     req.params.id,
     input.title,
@@ -1149,6 +1318,9 @@ app.put('/api/admin/polls/:id', requireAdmin, wrap(async (req, res) => {
     input.points,
     input.closesAt,
     input.house,
+    input.odds,
+    input.maxStake,
+    input.maxWin,
   ]);
   if (!r.rowCount) return notFound(res);
   res.json({ ok: true });
@@ -1226,8 +1398,8 @@ app.post('/api/admin/polls/:id/reopen', requireAdmin, wrap(async (req, res) => {
     if (scoring && choice !== 'keep' && choice !== 'zero') return 'choose';
     if (scoring && choice === 'keep') {
       await c.query(
-        `insert into awards (poll_id, poll_title, user_id, hit, points, resolved_at)
-         select p.id, p.title, v.user_id, (v.option_id = p.correct_option_id), p.points, p.resolved_at
+        `insert into awards (poll_id, poll_title, user_id, hit, points, resolved_at, gain)
+         select p.id, p.title, v.user_id, (v.option_id = p.correct_option_id), p.points, p.resolved_at, ${GAIN_SQL}
          from polls p join votes v on v.poll_id = p.id
          where p.id = $1`,
         [req.params.id]
@@ -1409,8 +1581,8 @@ app.delete('/api/admin/polls/:id', requireAdmin, wrap(async (req, res) => {
     if (scoring && choice !== 'keep' && choice !== 'zero') return 'choose';
     if (scoring && choice === 'keep') {
       await c.query(
-        `insert into awards (poll_id, poll_title, user_id, hit, points, resolved_at)
-         select p.id, p.title, v.user_id, (v.option_id = p.correct_option_id), p.points, p.resolved_at
+        `insert into awards (poll_id, poll_title, user_id, hit, points, resolved_at, gain)
+         select p.id, p.title, v.user_id, (v.option_id = p.correct_option_id), p.points, p.resolved_at, ${GAIN_SQL}
          from polls p join votes v on v.poll_id = p.id
          where p.id = $1`,
         [req.params.id]
@@ -1439,7 +1611,7 @@ async function setResetAt(key, value) {
 /* Pódio da semana: top 3 por posição (empates dividem o lugar), contas da casa
    incluídas, sem quem não pontuou. A lista já vem ordenada de computeWeeklyStandings. */
 function buildPodium(list) {
-  const eligible = list.filter((r) => r.points > 0);
+  const eligible = list.filter((r) => r.points > 0 && !r.isTest);
   const podium = [];
   let pos = 0;
   let prev = null;
@@ -1645,7 +1817,7 @@ app.post('/api/admin/prizes/:id/release', requireAdmin, wrap(async (req, res) =>
 /* ---------- Usuários: pontos manuais e banimento ---------- */
 app.get('/api/admin/users', requireAdmin, wrap(async (req, res) => {
   const [{ rows }, st, wk] = await Promise.all([
-    q('select id, display_name, login, avatar_url, banned, created_at from users where not is_house order by lower(display_name)'),
+    q('select id, display_name, login, avatar_url, banned, created_at from users where not is_house and not is_test order by lower(display_name)'),
     computeStandings(),
     computeWeeklyStandings(),
   ]);
@@ -1661,6 +1833,113 @@ app.get('/api/admin/users', requireAdmin, wrap(async (req, res) => {
       prizes: gen.has(u.id) ? gen.get(u.id).prizes.length : 0,
     })),
   });
+}));
+
+/* ---------- Painel de testes: contas fictícias de teste ----------
+   Contas "is_test" entram no ranking como participantes comuns (com 🧪 no nome), podem
+   votar/apostar pelo painel e são apagadas de uma vez com seus votos, pontos e emblemas. */
+const requireTests = wrap(async (req, res, next) => {
+  if (!(await hasSession(req, 'asid', 'admin'))) return res.status(401).json({ error: 'Acesso restrito ao admin.' });
+  if (!(await hasSession(req, 'tsid', 'tests'))) return res.status(403).json({ error: 'Digite a senha da aba Testes.', locked: true });
+  next();
+});
+
+app.get('/api/admin/tests/status', requireAdmin, wrap(async (req, res) => {
+  res.json({ configured: Boolean(TESTS_PASSWORD), unlocked: await hasSession(req, 'tsid', 'tests') });
+}));
+
+app.post('/api/admin/tests/unlock', requireAdmin, limit('tests', 8, 15 * 60 * 1000), wrap(async (req, res) => {
+  if (!TESTS_PASSWORD) return res.status(503).json({ error: 'TESTS_PASSWORD não está configurada no servidor.' });
+  const given = sha(String(req.body?.password ?? ''));
+  if (!crypto.timingSafeEqual(Buffer.from(given), Buffer.from(sha(TESTS_PASSWORD)))) {
+    return res.status(401).json({ error: 'Senha da aba Testes incorreta.' });
+  }
+  setCookie(res, 'tsid', await createSession('tests', null, TESTS_SESSION_MS), TESTS_SESSION_MS / 1000);
+  res.json({ ok: true });
+}));
+
+app.post('/api/admin/tests/lock', requireAdmin, wrap(async (req, res) => {
+  await destroySession(req, res, 'tsid');
+  res.json({ ok: true });
+}));
+
+app.post('/api/admin/test-users/:id/points', requireTests, wrap(async (req, res) => {
+  const delta = Number(req.body?.delta);
+  if (!Number.isInteger(delta) || delta === 0 || Math.abs(delta) > 100000) return res.status(400).json({ error: 'Valor inválido.' });
+  const u = (await q('select id from users where id = $1 and is_test', [req.params.id])).rows[0];
+  if (!u) return res.status(404).json({ error: 'Conta de teste não encontrada.' });
+  await q('insert into point_adjustments (user_id, delta, note) values ($1, $2, $3)', [u.id, delta, 'Teste']);
+  await computeStandings().catch(() => {});
+  res.json({ ok: true });
+}));
+
+const testUsers = () => q('select id, display_name from users where is_test order by created_at, display_name');
+
+app.get('/api/admin/test-users', requireTests, wrap(async (req, res) => {
+  const [{ rows }, st] = await Promise.all([testUsers(), computeStandings()]);
+  const pts = new Map(st.ranking.map((r) => [r.userId, r.points]));
+  const out = [];
+  for (const u of rows) {
+    const locked = await lockedStakes(pool, u.id);
+    out.push({ id: u.id, name: u.display_name, points: pts.get(u.id) || 0, locked });
+  }
+  res.json({ users: out });
+}));
+
+app.post('/api/admin/test-users', requireTests, wrap(async (req, res) => {
+  const count = Number(req.body?.count);
+  const start = Number(req.body?.startPoints) || 0;
+  if (!Number.isInteger(count) || count < 1 || count > 20) return res.status(400).json({ error: 'Crie de 1 a 20 contas por vez.' });
+  if (!Number.isInteger(start) || start < 0 || start > 100000) return res.status(400).json({ error: 'Pontos iniciais inválidos (0 a 100000).' });
+  const have = (await q('select count(*)::int as n from users where is_test')).rows[0].n;
+  if (have + count > 50) return res.status(400).json({ error: 'No máximo 50 contas de teste.' });
+  for (let i = 1; i <= count; i++) {
+    const id = uid();
+    const name = `🧪 Teste ${have + i}`;
+    await q('insert into users (id, twitch_id, login, display_name, is_test) values ($1, $2, $3, $4, true)', [id, `test-${id}`, `teste${have + i}`, name]);
+    if (start > 0) await q('insert into point_adjustments (user_id, delta, note) values ($1, $2, $3)', [id, start, 'Pontos iniciais (teste)']);
+  }
+  await computeStandings().catch(() => {});
+  broadcast();
+  res.status(201).json({ ok: true });
+}));
+
+app.post('/api/admin/test-users/:id/vote', requireTests, wrap(async (req, res) => {
+  const u = (await q('select id from users where id = $1 and is_test', [req.params.id])).rows[0];
+  if (!u) return res.status(404).json({ error: 'Conta de teste não encontrada.' });
+  const r = await castVote(String(req.body?.pollId ?? ''), u.id, req.body);
+  if (r.error) return res.status(r.status).json({ error: r.error });
+  res.json({ ok: true });
+}));
+
+// Todas as contas de teste votam sozinhas numa enquete aberta (opção e aposta aleatórias)
+app.post('/api/admin/test-users/random-votes', requireTests, wrap(async (req, res) => {
+  const [poll] = await fetchPolls('where id = $1', [String(req.body?.pollId ?? '')]);
+  if (!poll) return res.status(404).json({ error: 'Enquete não encontrada.' });
+  const opts = visibleOptions(poll);
+  const { rows } = await testUsers();
+  const st = poll.odds ? await computeStandings() : null;
+  const pts = new Map((st ? st.ranking : []).map((r) => [r.userId, r.points]));
+  let done = 0;
+  const skipped = [];
+  for (const u of rows) {
+    const body = { optionId: opts[Math.floor(Math.random() * opts.length)].id };
+    if (poll.odds) {
+      const free = (pts.get(u.id) || 0) - (await lockedStakes(pool, u.id, poll.id));
+      if (free < 1) { skipped.push(u.display_name); continue; }
+      body.stake = 1 + Math.floor(Math.random() * Math.min(free, 100, poll.maxStake || 100));
+    }
+    const r = await castVote(poll.id, u.id, body);
+    if (r.error) { if (r.status === 409 && !r.locked) return res.status(409).json({ error: r.error }); skipped.push(u.display_name); } else done += 1;
+  }
+  res.json({ ok: true, done, skipped: skipped.length });
+}));
+
+app.delete('/api/admin/test-users', requireTests, wrap(async (req, res) => {
+  const r = await q('delete from users where is_test'); // votos, pontos, emblemas e prêmios saem junto (cascade)
+  await computeStandings().catch(() => {});
+  broadcast();
+  res.json({ ok: true, removed: r.rowCount });
 }));
 
 const realUser = async (id) => (await q('select id, banned from users where id = $1 and not is_house', [id])).rows[0];
@@ -1724,13 +2003,14 @@ app.post('/api/admin/settings', requireAdmin, wrap(async (req, res) => {
     notifyClosing: 'notify_closing',
     hallVisible: 'hall_visible',
     notifyPrize: 'notify_prize',
+    lockVotes: 'lock_votes',
   };
   for (const [field, key] of Object.entries(flagFields)) {
     const v = req.body?.[field];
     if (v === undefined) continue;
     if (typeof v !== 'boolean') return res.status(400).json({ error: 'Valor inválido.' });
     entries.push([key, v ? '1' : '0']);
-    if (field === 'hallVisible') rankingChanged = true; // avisa as páginas abertas
+    if (field === 'hallVisible' || field === 'lockVotes') rankingChanged = true; // avisa as páginas abertas
   }
 
   if (mode !== undefined) {
