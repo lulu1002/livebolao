@@ -1067,7 +1067,7 @@
         ? '⚠️ A conta do bot é a dona do canal. Conecte uma conta separada, só para o bot.'
         : '⚠️ A conta do bot também entra no site como participante. Conecte uma conta separada, só para o bot.'));
     }
-    rows.push(h('p', { class: 'hint' }, 'O bot precisa ser uma conta diferente da sua (a de login e a do canal). Para autorizar com outra conta, abra o botão numa janela anônima ou saia da Twitch antes: a Twitch usa a conta que estiver aberta no navegador. Na hora de autorizar, entre com a conta que vai ser o bot. Cadastre esta URL em “OAuth Redirect URLs” do app da Twitch do bot: ', h('code', {}, d.redirectUri)));
+    rows.push(h('p', { class: 'hint' }, 'O bot nao funciona com a conta do meliante luian so pra lembrar msm: ', h('code', {}, d.redirectUri)));
     box.replaceChildren(...rows);
 
     $('#bot-enabled').checked = d.enabled;
