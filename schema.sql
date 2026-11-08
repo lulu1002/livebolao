@@ -285,6 +285,21 @@ create unique index if not exists admins_name_idx on admins (lower(name));
 alter table admins enable row level security;
 alter table sessions add column if not exists admin_id text references admins(id) on delete cascade;
 
+-- Bot da Twitch: conta que escreve no chat (tokens do OAuth). Uma linha só (id = 1); nunca sai do servidor.
+-- A configuração do bot (canal, avisos, mensagens) fica em 'settings' (chaves bot_*).
+create table if not exists bot_auth (
+  id            integer primary key default 1 check (id = 1),
+  bot_user_id   text not null,
+  bot_login     text not null,
+  access_token  text not null,
+  refresh_token text not null,
+  expires_at    timestamptz not null,
+  updated_at    timestamptz not null default now()
+);
+alter table bot_auth enable row level security;
+-- App da Twitch (Client ID) com o qual a conta do bot foi autorizada: se as credenciais do bot mudarem, é preciso conectar de novo.
+alter table bot_auth add column if not exists client_id text;
+
 -- Histórico de ações do painel admin (quem fez o quê e quando). Sem FK de propósito: o registro
 -- continua existindo depois que um admin é excluído. Guarda só o necessário, nunca senhas.
 create table if not exists admin_log (
@@ -309,6 +324,8 @@ alter table polls add column if not exists cancelled boolean not null default fa
 -- Pontos por opção: o admin define a pontuação de cada opção (poll_options.points); quem acerta leva os pontos da opção certa.
 alter table polls add column if not exists option_points boolean not null default false;
 alter table poll_options add column if not exists points integer;
+-- Somar os pontos da enquete (polls.points) aos da opção certa. Desligado: vale só o ponto da opção.
+alter table polls add column if not exists sum_points boolean not null default false;
 -- Mostrar ou esconder os pontos de cada opção para os participantes (escondidos até sair o resultado).
 alter table polls add column if not exists show_option_points boolean not null default true;
 -- Odd de prêmio fixo (alternativa à aposta): os pontos da enquete (points) são divididos entre quem acertar,

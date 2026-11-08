@@ -77,7 +77,7 @@
     $('#admin-pass').focus();
   }
 
-  const ADMIN_TABS = ['create', 'polls', 'house', 'streak', 'ach', 'prizes', 'hall', 'users', 'tests', 'admins', 'log', 'backup'];
+  const ADMIN_TABS = ['create', 'polls', 'house', 'streak', 'ach', 'prizes', 'hall', 'users', 'tests', 'admins', 'bot', 'log', 'backup'];
 
   // Nível de acesso de quem está logado (vem de /api/admin/me). O servidor confere tudo de novo; aqui só se esconde o que não vale.
   let me = { owner: false, permissions: [], name: '' };
@@ -122,6 +122,7 @@
     if (tab === 'tests') loadTests();
     if (tab === 'admins') loadAdmins();
     if (tab === 'log') loadLog(true);
+    if (tab === 'bot') loadBot();
   }
   ADMIN_TABS.forEach((t) => $(`#atab-${t}`).addEventListener('click', () => setAdminTab(t)));
 
@@ -212,7 +213,7 @@
       h('span', { class: 'count' }, `${o.voters.length} ${o.voters.length === 1 ? 'voto' : 'votos'}`)));
 
     const meta = [
-      p.optionPoints ? `🎯 pontos por opção: ${p.options.map((o) => `${o.text} (${o.points})`).join(' · ')}` : p.poolOdds ? `🎲 prêmio de ${p.points} pts dividido entre quem acertar${p.maxWin ? ` · ganho máx. +${p.maxWin}` : ''}` : p.odds ? `🎲 odd · ${p.pool} pts apostados${p.maxStake ? ` · aposta máx. ${p.maxStake}` : ''}${p.maxWin ? ` · ganho máx. +${p.maxWin}` : ''}` : `${p.points} ${p.points === 1 ? 'ponto' : 'pontos'} por acerto`,
+      p.optionPoints ? `🎯 pontos por opção${p.sumPoints ? ` + ${p.points} da enquete` : ''}: ${p.options.map((o) => `${o.text} (${o.points})`).join(' · ')}` : p.poolOdds ? `🎲 prêmio de ${p.points} pts dividido entre quem acertar${p.maxWin ? ` · ganho máx. +${p.maxWin}` : ''}` : p.odds ? `🎲 odd · ${p.pool} pts apostados${p.maxStake ? ` · aposta máx. ${p.maxStake}` : ''}${p.maxWin ? ` · ganho máx. +${p.maxWin}` : ''}` : `${p.points} ${p.points === 1 ? 'ponto' : 'pontos'} por acerto`,
       p.closesAt ? `encerra em ${fmtDate(p.closesAt)}` : 'sem prazo',
       `${p.totalVotes} ${p.totalVotes === 1 ? 'voto' : 'votos'}`,
     ].join(', ');
@@ -230,7 +231,7 @@
         ? h('p', { class: 'result house' }, `🏠 A casa ganhou: nenhuma opção bateu. +${p.points} pts pra cada conta da casa.`)
         : correct
           ? h('p', { class: 'result' }, p.optionPoints
-            ? `Resposta certa: ${correct.text}. ${p.hits} de ${p.totalVotes} acertaram (+${correct.points} pts cada).`
+            ? `Resposta certa: ${correct.text}. ${p.hits} de ${p.totalVotes} acertaram (+${correct.points + (p.sumPoints ? p.points : 0)} pts cada).`
             : p.poolOdds
             ? `Resposta certa: ${correct.text}. ${p.hits} de ${p.totalVotes} acertaram (+${p.hits ? Math.min(Math.floor(p.points / p.hits), p.maxWin || Infinity) : 0} pts cada).`
             : p.odds
@@ -466,7 +467,10 @@
     const pool = $('#f-odds-kind').value === 'pool';
     $('#f-odds-limits').hidden = !can('polls_odds') || !on;
     $('#f-max-stake-field').hidden = pool;
-    document.querySelector('label[for=f-points]').textContent = on && pool ? 'Prêmio total (dividido entre quem acertar)' : 'Pontos por acerto';
+    const opt = $('#f-opt-points').checked;
+    document.querySelector('label[for=f-points]').textContent = on && pool ? 'Prêmio total (dividido entre quem acertar)'
+      : opt ? ($('#f-sum-points').checked ? 'Pontos da enquete (somados aos de cada opção)' : 'Pontos da casa (só valem se ninguém acertar)')
+      : 'Pontos por acerto';
     $('#f-odds-kind-hint').textContent = pool
       ? 'Os pontos acima viram um prêmio único: cada acertador leva o prêmio ÷ nº de acertadores (arredondado para baixo). Pouca gente na certa = parte grande; muita gente = parte pequena. Ninguém perde pontos.'
       : 'Cada participante aposta pontos do próprio ranking. Quem acerta recebe aposta × odd (total de apostadores ÷ apostadores na opção); quem erra perde a aposta. Os “Pontos por acerto” só valem se a casa ganhar.';
@@ -479,6 +483,7 @@
   function syncOptionMode() {
     const op = $('#f-opt-points').checked;
     $('#f-show-opt-points-field').hidden = !op;
+    $('#f-sum-points-field').hidden = !op || !can('polls_odds');
     if (op) $('#f-odds').checked = false;
     $('#f-odds').disabled = op;
     $('#f-opt-points').disabled = Boolean(state.editing) || $('#f-odds').checked;
@@ -486,6 +491,7 @@
     if (!state.editing) $('#f-options-hint').textContent = op ? 'De 1 a 10 opções, uma por linha, no formato Texto | pontos.' : 'De 1 a 10 opções, uma por linha.';
   }
   $('#f-opt-points').addEventListener('change', () => { syncOptionMode(); syncOddsLimits(); });
+  $('#f-sum-points').addEventListener('change', syncOddsLimits);
   $('#f-odds').addEventListener('change', () => { if ($('#f-odds').checked) $('#f-opt-points').checked = false; syncOptionMode(); });
 
   function applyFormPerms() {
@@ -508,6 +514,7 @@
     $('#f-odds').checked = false;
     $('#f-opt-points').checked = false;
     $('#f-show-opt-points').checked = true;
+    $('#f-sum-points').checked = false;
     $('#f-odds-kind').value = 'stake';
     $('#f-max-stake').value = '';
     $('#f-max-win').value = '';
@@ -535,6 +542,7 @@
     $('#f-odds').checked = Boolean(p.odds || p.poolOdds);
     $('#f-opt-points').checked = Boolean(p.optionPoints);
     $('#f-show-opt-points').checked = p.showOptionPoints !== false;
+    $('#f-sum-points').checked = Boolean(p.sumPoints);
     $('#f-odds-kind').value = p.poolOdds ? 'pool' : 'stake';
     $('#f-max-stake').value = p.maxStake || '';
     $('#f-max-win').value = p.maxWin || '';
@@ -587,6 +595,7 @@
       house: $('#f-house').checked,
       optionPoints: $('#f-opt-points').checked,
       showOptionPoints: $('#f-show-opt-points').checked,
+      sumPoints: $('#f-opt-points').checked && $('#f-sum-points').checked,
       odds: $('#f-odds').checked && $('#f-odds-kind').value === 'stake',
       poolOdds: $('#f-odds').checked && $('#f-odds-kind').value === 'pool',
       maxStake: $('#f-max-stake').value,
@@ -1020,6 +1029,100 @@
     }
   });
   $('#adm-cancel').addEventListener('click', resetAdminForm);
+
+  /* ---------- Bot da Twitch ---------- */
+  const BOT_EVENTS = [
+    ['created', 'Enquete criada'],
+    ['result', 'Resultado da enquete'],
+    ['prize', 'Prêmio conquistado (marca o ganhador)'],
+  ];
+  const botState = { data: null };
+
+  function renderBot() {
+    const d = botState.data;
+    const box = $('#bot-status');
+    const rows = [];
+    if (!d.twitchConfigured) {
+      rows.push(h('p', { class: 'error' }, 'O servidor está sem as credenciais do bot (BOT_TWITCH_CLIENT_ID e BOT_TWITCH_CLIENT_SECRET): o bot não consegue conectar.'));
+    }
+    rows.push(h('div', { class: 'house-row' },
+      h('span', { class: 'nm' }, d.connected ? h('span', {}, '✅ Conta do bot conectada: ', h('b', {}, d.botLogin)) : '⚠️ Nenhuma conta de bot conectada'),
+      can('bot') && d.twitchConfigured ? h('a', { class: 'btn ghost small', href: '/api/admin/bot/connect' }, d.connected ? 'Trocar conta' : 'Conectar conta do bot') : null,
+      can('bot') && d.connected ? h('button', { class: 'btn danger small', type: 'button', onclick: disconnectBot }, 'Desconectar') : null));
+    rows.push(h('p', { class: 'hint' }, d.ownApp
+      ? '🔑 O bot usa o app da Twitch próprio (BOT_TWITCH_CLIENT_ID / BOT_TWITCH_CLIENT_SECRET), separado do login do site.'
+      : 'O bot está usando as mesmas credenciais do login do site. Para usar o app de outra conta, defina BOT_TWITCH_CLIENT_ID e BOT_TWITCH_CLIENT_SECRET no servidor.'));
+    // Resultado da última tentativa de conectar (fica na tela, com o motivo)
+    const [cr, ...crRest] = String(d.connectResult || '').split('|');
+    const crDetail = crRest.join('|');
+    const crMsg = {
+      'conta-login': `A conta "${crDetail}" foi recusada porque já entra no site como participante. Autorize com a conta do bot (janela anônima, ou saia da Twitch antes).`,
+      'conta-canal': `A conta "${crDetail}" foi recusada porque é a dona do canal. Autorize com uma conta separada, só para o bot.`,
+      erro: `Não deu para conectar: ${crDetail || 'erro desconhecido'}. Confira o Client ID/Secret do bot e se a URL de redirecionamento está cadastrada no app da Twitch.`,
+      cancelado: 'A autorização foi cancelada.',
+    }[cr];
+    if (crMsg) rows.push(h('p', { class: 'error' }, `⚠️ Última tentativa de conectar: ${crMsg}`));
+    if (d.conflict) {
+      rows.push(h('p', { class: 'error' }, d.conflict === 'canal'
+        ? '⚠️ A conta do bot é a dona do canal. Conecte uma conta separada, só para o bot.'
+        : '⚠️ A conta do bot também entra no site como participante. Conecte uma conta separada, só para o bot.'));
+    }
+    rows.push(h('p', { class: 'hint' }, 'O bot precisa ser uma conta diferente da sua (a de login e a do canal). Para autorizar com outra conta, abra o botão numa janela anônima ou saia da Twitch antes: a Twitch usa a conta que estiver aberta no navegador. Na hora de autorizar, entre com a conta que vai ser o bot. Cadastre esta URL em “OAuth Redirect URLs” do app da Twitch do bot: ', h('code', {}, d.redirectUri)));
+    box.replaceChildren(...rows);
+
+    $('#bot-enabled').checked = d.enabled;
+    $('#bot-channel').value = d.channel;
+    $('#bot-events').replaceChildren(...BOT_EVENTS.map(([k, label]) => h('fieldset', { class: 'modes' },
+      h('legend', {}, label),
+      h('label', { class: 'aopt' }, h('input', { type: 'checkbox', id: `bot-on-${k}`, checked: d.on[k] }), h('span', {}, 'Avisar no chat')),
+      h('textarea', { id: `bot-tpl-${k}`, rows: 2, maxlength: 300, class: 'bot-tpl' }, d.tpl[k]),
+      h('span', { class: 'hint' }, `Variáveis: ${d.placeholders[k].map((v) => `{${v}}`).join(' ')}`),
+      h('div', { class: 'actions' }, h('button', { class: 'btn ghost small', type: 'button', onclick: () => { $(`#bot-tpl-${k}`).value = d.defaults[k]; } }, 'Restaurar padrão')))));
+    $('#bot-last').textContent = d.lastError
+      ? `Último erro: ${d.lastError}`
+      : (d.lastSent ? `Última mensagem enviada: ${fmtDate(d.lastSent)}` : '');
+  }
+
+  async function loadBot() {
+    try {
+      botState.data = await api('/api/admin/bot');
+      renderBot();
+    } catch (e) {
+      handleError(e);
+    }
+  }
+
+  async function disconnectBot() {
+    if (!confirm('Desconectar a conta do bot? Ele para de escrever no chat até você conectar de novo.')) return;
+    await act(() => api('/api/admin/bot/disconnect', { method: 'POST' }), 'Bot desconectado');
+    loadBot();
+  }
+
+  $('#bot-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    $('#bot-error').textContent = '';
+    const body = { enabled: $('#bot-enabled').checked, channel: $('#bot-channel').value, on: {}, tpl: {} };
+    BOT_EVENTS.forEach(([k]) => { body.on[k] = $(`#bot-on-${k}`).checked; body.tpl[k] = $(`#bot-tpl-${k}`).value; });
+    try {
+      await api('/api/admin/bot/config', { method: 'POST', body });
+      toast('Configuração do bot salva');
+      loadBot();
+    } catch (err) {
+      if (err.status === 401) handleError(err);
+      else $('#bot-error').textContent = err.message;
+    }
+  });
+  $('#bot-test').addEventListener('click', async () => {
+    $('#bot-error').textContent = '';
+    try {
+      await api('/api/admin/bot/test', { method: 'POST' });
+      toast('Mensagem de teste enviada');
+      loadBot();
+    } catch (err) {
+      if (err.status === 401) handleError(err);
+      else $('#bot-error').textContent = err.message;
+    }
+  });
 
   /* ---------- Histórico de ações (só o dono) ---------- */
   const logState = { last: null };
@@ -1485,7 +1588,20 @@
   (async function init() {
     try {
       const info = await api('/api/admin/me');
-      if (info.admin) showPanel(info);
+      if (info.admin) {
+        showPanel(info);
+        const botResult = new URLSearchParams(location.search).get('bot');
+        if (botResult) {
+          history.replaceState(null, '', location.pathname);
+          setAdminTab('bot');
+          toast({
+            ok: 'Conta do bot conectada',
+            cancelado: 'Conexão cancelada',
+            'conta-canal': 'Essa é a conta dona do canal. Use uma conta separada para o bot.',
+            'conta-login': 'Essa conta já entra no site como participante. Use uma conta separada para o bot.',
+          }[botResult] || 'Não foi possível conectar a conta do bot', botResult !== 'ok');
+        }
+      }
       else showLogin();
     } catch (e) {
       showLogin();

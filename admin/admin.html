@@ -56,6 +56,7 @@
         <button type="button" role="tab" id="atab-users" aria-controls="apane-users" aria-selected="false">👥 Os meliantes </button>
         <button type="button" role="tab" id="atab-tests" data-perm="tests" aria-controls="apane-tests" aria-selected="false">🧪 Testes</button>
         <button type="button" role="tab" id="atab-admins" aria-controls="apane-admins" aria-selected="false" data-perm="owner">🔑 Admins</button>
+        <button type="button" role="tab" id="atab-bot" aria-controls="apane-bot" aria-selected="false">🤖 Bot</button>
         <button type="button" role="tab" id="atab-log" aria-controls="apane-log" aria-selected="false" data-perm="owner">📜 Histórico</button>
         <button type="button" role="tab" id="atab-backup" data-perm="backup" aria-controls="apane-backup" aria-selected="false">Backup</button>
       </nav>
@@ -111,11 +112,15 @@
             </div>
             <div class="field">
               <label class="aopt"><input type="checkbox" id="f-opt-points"><span>🎯 Pontos por opção: cada opção tem a sua pontuação</span></label>
-              <span class="hint">Escreva as opções no formato <code>Texto | pontos</code> (uma por linha). Quem votar na opção certa leva os pontos dela; quem errar leva 0. Não combina com odd e não dá para mudar depois de publicar.</span>
+              <span class="hint">Escreva as opções no formato <code>Texto | pontos</code> (uma por linha). Quem votar na opção certa leva os pontos dela (de 0 a 1000; 0 vale como acerto, mas sem pontos); quem errar leva 0. Não combina com odd e não dá para mudar depois de publicar.</span>
+            </div>
+            <div class="field" id="f-sum-points-field" hidden>
+              <label class="aopt"><input type="checkbox" id="f-sum-points"><span>➕ Somar os pontos da enquete aos pontos da opção</span></label>
+              <span class="hint">Ligado: quem acerta leva os “Pontos por acerto” da enquete <b>mais</b> os pontos da opção certa (ex.: enquete 10 + opção 5 = 15). Desligado: só os pontos da opção. Dá para mudar a qualquer momento.</span>
             </div>
             <div class="field" id="f-show-opt-points-field" hidden>
-              <label class="aopt"><input type="checkbox" id="f-show-opt-points" checked><span>👁️ Mostrar os pontos de cada opção na enquete</span></label>
-              <span class="hint">Desligado, os participantes não veem a pontuação das opções enquanto votam; ela aparece quando o resultado é definido. Você pode mudar a qualquer momento.</span>
+              <label class="aopt"><input type="checkbox" id="f-show-opt-points" checked><span>👁️ Mostrar aos participantes os pontos que cada opção dá</span></label>
+              <span class="hint">Desligado, os participantes não veem quanto cada opção dá (o total que levariam) enquanto votam; aparece quando o resultado é definido. Você pode mudar a qualquer momento.</span>
             </div>
             <div class="field">
               <label class="aopt"><input type="checkbox" id="f-odds"><span>🎲 Enquete com odd: o participante aposta pontos do ranking</span></label>
@@ -386,6 +391,28 @@
           <div class="actions">
             <button class="btn" type="submit" id="adm-save">Criar admin</button>
             <button class="btn ghost" type="button" id="adm-cancel" hidden>Cancelar</button>
+          </div>
+        </form>
+      </section>
+      </div>
+
+      <div id="apane-bot" data-need="bot" role="tabpanel" aria-labelledby="atab-bot" hidden>
+      <section class="panel narrow-md">
+        <h2>🤖 Bot da Twitch</h2>
+        <p class="hint">O bot escreve no chat da sua live quando uma enquete é criada, quando sai o resultado e quando alguém conquista um prêmio (marcando o ganhador).</p>
+        <div id="bot-status" class="alist"></div>
+        <form id="bot-form">
+          <div class="field"><label class="aopt"><input type="checkbox" id="bot-enabled"><span>🤖 Bot ligado</span></label></div>
+          <div class="field">
+            <label for="bot-channel">Canal da Twitch onde o bot escreve (login)</label>
+            <input id="bot-channel" maxlength="25" autocomplete="off" placeholder="ex.: seucanal">
+          </div>
+          <div id="bot-events"></div>
+          <p class="hint" id="bot-last"></p>
+          <p class="error" id="bot-error" role="alert"></p>
+          <div class="actions">
+            <button class="btn" type="submit">Salvar</button>
+            <button class="btn ghost" type="button" id="bot-test">Enviar mensagem de teste</button>
           </div>
         </form>
       </section>

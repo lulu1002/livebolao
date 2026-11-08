@@ -14,7 +14,8 @@ Ao criar uma enquete no admin, marque **Enquete com odd** (cada enquete decide; 
 - O participante escolhe uma opção e aposta pontos do **ranking geral** (saldo = total de pontos menos o que já está apostado em enquetes sem resultado). Pode trocar a aposta até a votação encerrar (a menos que a Trava de voto esteja ligada).
 - Odd = total de apostadores ÷ apostadores na opção. Quem acerta recebe `aposta × odd` (ganho líquido = isso − aposta); quem erra perde a aposta. Pouca gente na opção certa = prêmio alto; muita gente = prêmio baixo; todo mundo na mesma opção = devolve a aposta.
 - **Dois tipos de odd** (escolha ao marcar “Enquete com odd”): **Aposta** (acima) ou **Prêmio fixo**. No prêmio fixo ninguém usa pontos do próprio ranking: o admin define os pontos da enquete (campo “Prêmio total”) e eles são divididos entre quem acertar (prêmio ÷ nº de acertadores, arredondado para baixo). Pouca gente na opção certa = parte grande; muita gente = parte pequena; quem erra não perde nada. O “Ganho máximo por pessoa” também vale aqui. Se a casa ganhar, o prêmio é dividido entre as contas da casa escolhidas.
-- **Pontos por opção** (outro modo, sem odd): marque “Pontos por opção” e escreva as opções como `Texto | pontos` (ex.: `Time A | 5`). Quem votar na opção certa leva os pontos dela; quem errar leva 0. Se a casa ganhar, as contas da casa levam os “Pontos por acerto”. Não combina com odd e não dá para ligar/desligar depois de publicar.
+- **Pontos por opção** (outro modo, sem odd): marque “Pontos por opção” e escreva as opções como `Texto | pontos` (ex.: `Time A | 5`). Quem votar na opção certa leva os pontos dela (de 0 a 1000; uma opção com 0 conta como acerto, para a sequência e as conquistas, mas não dá pontos); quem errar leva 0. Se a casa ganhar, as contas da casa levam os “Pontos por acerto”. Não combina com odd e não dá para ligar/desligar depois de publicar.
+- Em “Pontos por opção” há também a caixa **Somar os pontos da enquete aos pontos da opção** (desligada por padrão): ligada, quem acerta leva os “Pontos por acerto” da enquete **mais** os da opção certa (enquete 10 + opção 5 = 15); desligada, só os da opção. Pode mudar a qualquer momento (o ranking recalcula). Se a casa ganhar, as contas da casa continuam levando só os pontos da enquete.
 - Em “Pontos por opção” há a caixa **Mostrar os pontos de cada opção na enquete**: desligada, os participantes não veem a pontuação das opções durante a votação (o servidor nem envia os valores); eles aparecem quando o resultado é definido. Dá para mudar a qualquer momento.
 - O admin pode definir, por enquete, uma **aposta máxima** e um **ganho máximo** por pessoa (campos opcionais; em branco = sem limite). O ganho máximo limita o lucro líquido de quem acertar.
 - Se a casa ganhar ("ninguém acertou"), os apostadores perdem a aposta e as contas da casa escolhidas recebem os "Pontos por acerto" da enquete.
@@ -34,6 +35,19 @@ Admins sem permissão **veem tudo em modo somente leitura** (as abas ficam visí
 ### Histórico de ações
 
 Toda ação que muda algo no painel (criar/editar/encerrar/excluir enquete, resultado, pontos, banimentos, configurações, admins…) é registrada com quem fez, o quê e quando. O dono vê na aba **📜 Histórico** (filtro por admin, “carregar mais”). Registros com mais de 6 meses são apagados automaticamente. Senhas e o conteúdo das apostas/contas de teste não entram.
+
+## Bot da Twitch
+
+Aba **🤖 Bot** do admin: o bot escreve no chat da sua live quando (1) uma enquete é criada, (2) sai o resultado e (3) alguém conquista um prêmio (marcando o ganhador com @). Cada aviso liga/desliga e tem mensagem editável, com variáveis como `{titulo}`, `{resposta}`, `{usuario}`, `{premio}`, `{link}`.
+
+Configuração (uma vez):
+1. **App da Twitch do bot:** o bot pode usar o app (Client ID e Secret) de **outra conta**, separado do app do login do site. Crie o app com a conta do bot em dev.twitch.tv/console (tipo de cliente *Confidential*) e defina `BOT_TWITCH_CLIENT_ID` e `BOT_TWITCH_CLIENT_SECRET` no servidor. Sem elas, o bot usa as mesmas credenciais do login. Em **OAuth Redirect URLs** desse app, adicione `https://SEU-SITE/auth/twitch-bot/callback` (a aba mostra a URL exata). Se você trocar essas credenciais depois, é preciso conectar a conta do bot de novo.
+2. Na aba Bot, clique em **Conectar conta do bot** e autorize com a conta que será o bot (pode ser a sua ou uma conta separada). Permissões pedidas: `user:write:chat` e `user:bot`.
+3. Informe o **canal** (login da Twitch), ligue o bot, salve e use **Enviar mensagem de teste**.
+
+A conta do bot tem que ser **separada**: o sistema recusa a conta dona do canal e qualquer conta que já entre no site como participante, e a conta do bot não consegue fazer login no site. Dica: para autorizar com outra conta, use uma janela anônima (a Twitch usa a conta aberta no navegador).
+
+Dica: dê `/mod` ao bot no seu canal, para o chat não barrar mensagens (modo só-seguidores, lentidão etc.). As mensagens saem em fila, uma a cada ~1,5 s. O acesso do bot fica só no servidor (tabela `bot_auth`) e é renovado sozinho. Quem tem a permissão “Bot da Twitch” conecta, configura e testa; os outros admins só veem.
 
 ## Cancelar enquete
 

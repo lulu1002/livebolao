@@ -282,6 +282,7 @@
     if (p.myPoints > 0) {
       return h('p', { class: 'note hit' }, `Você acertou: +${p.myPoints} ${p.myPoints === 1 ? 'ponto' : 'pontos'}.`);
     }
+    if (p.myHit) return h('p', { class: 'note hit' }, 'Você acertou, mas essa opção vale 0 pontos.');
     return h('p', { class: 'note miss' }, 'Você errou desta vez. 0 pontos.');
   }
 
@@ -851,6 +852,7 @@
     if (!result) return;
     if (result === 'cancelado') toast('Login cancelado.');
     else if (result === 'banido') toast('Esta conta foi banida do bolão.', true);
+    else if (result === 'bot') toast('Esta conta é o bot do bolão e não pode participar. Entre com outra conta.', true);
     else toast('Não foi possível entrar com a Twitch. Tente de novo.', true);
     history.replaceState(null, '', location.pathname + location.hash);
   }
