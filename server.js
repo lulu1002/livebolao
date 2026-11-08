@@ -117,16 +117,69 @@ function setCookie(res, name, value, maxAgeSec) {
 }
 
 /* Sessões ficam no banco: sobrevivem a reinícios do servidor */
-async function createSession(kind, userId, ttlMs) {
+async function createSession(kind, userId, ttlMs, adminId = null) {
   const token = crypto.randomBytes(32).toString('hex');
-  await q('insert into sessions (token_hash, kind, user_id, expires_at) values ($1, $2, $3, $4)', [
+  await q('insert into sessions (token_hash, kind, user_id, expires_at, admin_id) values ($1, $2, $3, $4, $5)', [
     sha(token),
     kind,
     userId,
     new Date(Date.now() + ttlMs),
+    adminId,
   ]);
   return token;
 }
+
+/* ---------- Admins e níveis de acesso ---------- */
+const PERMISSIONS = [
+  { key: 'polls_create', group: 'Enquetes', label: 'Criar enquetes' },
+  { key: 'polls_edit', group: 'Enquetes', label: 'Editar título, descrição, pontos, prazo, casa e tópico' },
+  { key: 'polls_odds', group: 'Enquetes', label: 'Definir odd e tetos de aposta/ganho' },
+  { key: 'polls_resolve', group: 'Enquetes', label: 'Encerrar, reabrir e definir a resposta certa' },
+  { key: 'polls_visibility', group: 'Enquetes', label: 'Ocultar ou mostrar enquetes na página' },
+  { key: 'polls_delete', group: 'Enquetes', label: 'Excluir enquetes' },
+  { key: 'topics', group: 'Outros', label: 'Gerenciar tópicos' },
+  { key: 'house', group: 'Outros', label: 'Gerenciar contas da casa' },
+  { key: 'users', group: 'Outros', label: 'Banir usuários e ajustar pontos' },
+  { key: 'ranking', group: 'Outros', label: 'Zerar rankings e mexer no pódio semanal' },
+  { key: 'prizes', group: 'Outros', label: 'Gerenciar prêmios' },
+  { key: 'achievements', group: 'Outros', label: 'Gerenciar conquistas' },
+  { key: 'settings', group: 'Outros', label: 'Configurações gerais (modo, bônus, notificações, trava de voto)' },
+  { key: 'tests', group: 'Outros', label: 'Aba de testes (ainda pede a senha dela)' },
+  { key: 'backup', group: 'Outros', label: 'Baixar backup' },
+];
+const PERMISSION_KEYS = PERMISSIONS.map((p) => p.key);
+
+const hashPassword = (pw) => {
+  const salt = crypto.randomBytes(16).toString('hex');
+  return `scrypt$${salt}$${crypto.scryptSync(pw, salt, 64).toString('hex')}`;
+};
+const checkPassword = (pw, stored) => {
+  const [kind, salt, hash] = String(stored).split('$');
+  if (kind !== 'scrypt' || !salt || !hash) return false;
+  const a = crypto.scryptSync(pw, salt, 64);
+  const b = Buffer.from(hash, 'hex');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+};
+
+// Quem está logado no painel: o dono (sem admin_id) ou um admin com nível. As permissões são lidas do banco
+// a cada requisição, então mudar o nível de alguém vale na hora.
+async function getAdmin(req) {
+  const token = parseCookies(req).asid;
+  if (!token) return null;
+  const { rows } = await q(
+    `select s.admin_id, a.name, a.permissions
+     from sessions s left join admins a on a.id = s.admin_id
+     where s.token_hash = $1 and s.kind = 'admin' and s.expires_at > now()`,
+    [sha(token)]
+  );
+  const r = rows[0];
+  if (!r) return null;
+  if (!r.admin_id) return { id: null, name: 'Dono', owner: true, perms: new Set(PERMISSION_KEYS) };
+  if (!r.name) return null;
+  return { id: r.admin_id, name: r.name, owner: false, perms: new Set(r.permissions) };
+}
+const adminView = (a) => ({ admin: true, name: a.name, owner: a.owner, permissions: [...a.perms] });
+const can = (req, key) => Boolean(req.admin && (req.admin.owner || req.admin.perms.has(key)));
 async function hasSession(req, cookieName, kind) {
   const token = parseCookies(req)[cookieName];
   if (!token) return false;
@@ -198,6 +251,7 @@ function rowToPoll(r) {
     topicId: r.topic_id,
     house: Boolean(r.house),
     odds: Boolean(r.odds),
+    poolOdds: Boolean(r.pool_odds),
     maxStake: r.max_stake,
     maxWin: r.max_win,
     createdAt: iso(r.created_at),
@@ -259,6 +313,12 @@ const netWin = (stake, total, onOption, maxWin) => {
 // Ganho líquido de um voto numa enquete resolvida (aliases: v = votes, p = polls).
 // Sem aposta: regra antiga (p.points se acertou). Com aposta: acertou = stake*odd - stake; errou = -stake.
 const GAIN_SQL = `case
+    when v.stake is null and p.pool_odds then
+      (case when v.option_id = p.correct_option_id then
+        least(floor(p.points::numeric
+          / (select count(*) from votes t3 where t3.poll_id = v.poll_id and t3.option_id = p.correct_option_id))::int,
+          coalesce(p.max_win, 2147483647))
+       else 0 end)
     when v.stake is null then (case when v.option_id = p.correct_option_id then p.points else 0 end)
     when v.option_id = p.correct_option_id then
       least(
@@ -293,7 +353,7 @@ function publicPoll(p, votes, userId) {
   const status = pollStatus(p);
   const mine = userId ? votes.find((v) => v.user_id === userId) : null;
   // Enquete com odd mostra as contagens desde o início (a odd depende delas)
-  const showResults = status !== 'open' || p.odds;
+  const showResults = status !== 'open' || p.odds || p.poolOdds;
   const bets = p.odds ? votes.filter((v) => v.stake != null) : [];
   const countOn = (id) => bets.filter((v) => v.option_id === id).length;
   const myBet = p.odds && mine && mine.stake != null ? mine : null;
@@ -305,6 +365,9 @@ function publicPoll(p, votes, userId) {
       : -myBet.stake;
   }
   const round2 = (n) => Math.round(n * 100) / 100;
+  // Odd de prêmio fixo: a parte de cada acertador = pontos da enquete ÷ nº de acertadores (com o teto de ganho)
+  const capWin = (n) => (p.maxWin ? Math.min(n, p.maxWin) : n);
+  const poolShare = (winners) => (winners > 0 ? capWin(Math.floor(p.points / winners)) : 0);
   return {
     id: p.id,
     title: p.title,
@@ -317,13 +380,19 @@ function publicPoll(p, votes, userId) {
     totalVotes: p.odds ? bets.length : votes.length,
     odds: Boolean(p.odds),
     maxStake: p.odds ? p.maxStake : null,
-    maxWin: p.odds ? p.maxWin : null,
+    poolOdds: Boolean(p.poolOdds),
+    maxWin: p.odds || p.poolOdds ? p.maxWin : null,
     options: visibleOptions(p).map((o) => {
       const base = {
         id: o.id,
         text: o.text,
         votes: showResults ? (p.odds ? countOn(o.id) : votes.filter((v) => v.option_id === o.id).length) : null,
       };
+      if (p.poolOdds) {
+        // Parte do prêmio que a pessoa levaria se votasse aqui e esta opção fosse a certa
+        const on = votes.filter((v) => v.option_id === o.id).length - (mine && mine.option_id === o.id ? 1 : 0);
+        base.share = poolShare(on + 1);
+      }
       if (p.odds) {
         // Odd que a pessoa receberia se apostasse agora nesta opção (sem contar a aposta atual dela)
         const total = bets.length - (myBet ? 1 : 0);
@@ -340,7 +409,9 @@ function publicPoll(p, votes, userId) {
     myHit: status === 'resolved' && mine ? mine.option_id === p.correctOptionId : null,
     myPoints:
       status === 'resolved' && mine && p.counted
-        ? (p.odds && myBet ? myNet : (mine.option_id === p.correctOptionId ? p.points : 0))
+        ? (p.odds && myBet ? myNet
+          : p.poolOdds ? (mine.option_id === p.correctOptionId ? poolShare(votes.filter((v) => v.option_id === p.correctOptionId).length) : 0)
+          : (mine.option_id === p.correctOptionId ? p.points : 0))
         : null,
   };
 }
@@ -361,6 +432,7 @@ function adminPoll(p, votes) {
     counted: p.counted,
     house: p.house,
     odds: p.odds,
+    poolOdds: p.poolOdds,
     maxStake: p.maxStake,
     maxWin: p.maxWin,
     pool: p.odds ? votes.reduce((n, v) => n + (v.stake || 0), 0) : null,
@@ -737,7 +809,12 @@ function parsePollInput(body, requireOptions) {
     }
   }
   const odds = body?.odds === true;
-  const out = { title, description, points, closesAt, house: body?.house === true, odds, maxStake: odds ? maxStake : null, maxWin: odds ? maxWin : null };
+  const poolOdds = body?.poolOdds === true;
+  if (odds && poolOdds) return { error: 'Escolha só um tipo de odd: aposta de pontos do ranking ou prêmio fixo dividido.' };
+  const out = {
+    title, description, points, closesAt, house: body?.house === true, odds, poolOdds,
+    maxStake: odds ? maxStake : null, maxWin: odds || poolOdds ? maxWin : null,
+  };
   if (requireOptions) {
     const raw = Array.isArray(body?.options) ? body.options : [];
     const options = [...new Set(raw.map((o) => String(o).trim()).filter(Boolean))];
@@ -801,13 +878,85 @@ setInterval(() => {
 
 // Qualquer alteração feita pelo admin avisa as páginas abertas
 const QUIET_ADMIN_PATHS = new Set(['/login', '/logout', '/settings']);
+
+/* ---------- Histórico de ações do admin ---------- */
+// [método, caminho, texto da ação, (body, ctx) => detalhe]. Só ações que mudam algo entram aqui.
+const nameOf = (b) => b?.name || b?.title || b?.label || null;
+const ADMIN_ACTIONS = [
+  ['POST', /^\/login$/, 'Entrou no painel'],
+  ['POST', /^\/polls$/, 'Criou a enquete', (b) => b?.title],
+  ['PUT', /^\/polls\/[^/]+$/, 'Editou a enquete', (b, c) => c.title],
+  ['POST', /^\/polls\/[^/]+\/topic$/, 'Moveu a enquete de tópico', (b, c) => c.title],
+  ['POST', /^\/polls\/[^/]+\/close$/, 'Encerrou a votação', (b, c) => c.title],
+  ['POST', /^\/polls\/[^/]+\/reopen$/, 'Reabriu a votação', (b, c) => c.title],
+  ['POST', /^\/polls\/[^/]+\/resolve$/, 'Definiu o resultado da enquete', (b, c) => c.title],
+  ['POST', /^\/polls\/[^/]+\/visibility$/, 'Mudou a visibilidade da enquete', (b, c) => `${c.title || ''} → ${b?.visible ? 'visível' : 'oculta'}`],
+  ['DELETE', /^\/polls\/[^/]+$/, 'Excluiu a enquete', (b, c) => c.title],
+  ['POST', /^\/topics$/, 'Criou um tópico', (b) => nameOf(b)],
+  ['PUT', /^\/topics\/[^/]+$/, 'Renomeou um tópico', (b, c) => `${c.name || ''} → ${nameOf(b) || ''}`],
+  ['DELETE', /^\/topics\/[^/]+$/, 'Excluiu um tópico', (b, c) => c.name],
+  ['POST', /^\/house-accounts$/, 'Criou uma conta da casa', (b) => nameOf(b)],
+  ['PUT', /^\/house-accounts\/[^/]+$/, 'Editou uma conta da casa', (b, c) => c.user],
+  ['DELETE', /^\/house-accounts\/[^/]+$/, 'Removeu uma conta da casa', (b, c) => c.user],
+  ['POST', /^\/ranking\/reset-weekly$/, 'Zerou o ranking semanal'],
+  ['POST', /^\/ranking\/reset-general$/, 'Zerou o ranking geral'],
+  ['DELETE', /^\/hall\/[^/]+$/, 'Removeu um registro do pódio semanal'],
+  ['POST', /^\/prizes$/, 'Criou um prêmio', (b) => nameOf(b)],
+  ['PUT', /^\/prizes\/[^/]+$/, 'Editou um prêmio', (b) => nameOf(b)],
+  ['DELETE', /^\/prizes\/[^/]+$/, 'Excluiu um prêmio'],
+  ['POST', /^\/prizes\/[^/]+\/remove$/, 'Tirou um prêmio do dono'],
+  ['POST', /^\/prizes\/[^/]+\/release$/, 'Liberou um prêmio'],
+  ['POST', /^\/users\/[^/]+\/ban$/, 'Baniu/desbaniu um usuário', (b, c) => `${c.user || ''}${b?.banned === false ? ' (desbaniu)' : ''}`],
+  ['POST', /^\/users\/[^/]+\/points$/, 'Ajustou pontos de um usuário', (b, c) => `${c.user || ''}: ${Number(b?.delta) > 0 ? '+' : ''}${b?.delta}${b?.note ? ` (${b.note})` : ''}`],
+  ['DELETE', /^\/adjustments\/[^/]+$/, 'Removeu um ajuste de pontos'],
+  ['POST', /^\/settings$/, 'Mudou configurações', (b) => Object.keys(b || {}).map((k) => `${k}=${typeof b[k] === 'object' ? 'ok' : b[k]}`).join(', ')],
+  ['POST', /^\/achievements$/, 'Criou uma conquista', (b) => nameOf(b)],
+  ['PUT', /^\/achievements\/[^/]+$/, 'Editou uma conquista', (b) => nameOf(b)],
+  ['POST', /^\/achievements\/[^/]+\/active$/, 'Ativou/desativou uma conquista'],
+  ['DELETE', /^\/achievements\/[^/]+$/, 'Excluiu uma conquista'],
+  ['POST', /^\/admins$/, 'Criou um admin', (b) => b?.name],
+  ['PUT', /^\/admins\/[^/]+$/, 'Editou um admin', (b, c) => `${c.admin || ''}${b?.password ? ' (senha trocada)' : ''}${b?.permissions ? ' (permissões)' : ''}`],
+  ['DELETE', /^\/admins\/[^/]+$/, 'Excluiu um admin', (b, c) => c.admin],
+];
+
+// Busca o nome do que vai ser alterado ANTES da ação (depois de excluir, já não dá para ler)
+async function actionContext(path) {
+  const ctx = {};
+  let m;
+  try {
+    if ((m = path.match(/^\/polls\/([^/]+)/))) ctx.title = (await q('select title from polls where id = $1', [m[1]])).rows[0]?.title;
+    else if ((m = path.match(/^\/(?:users|house-accounts)\/([^/]+)/))) ctx.user = (await q('select display_name from users where id = $1', [m[1]])).rows[0]?.display_name;
+    else if ((m = path.match(/^\/topics\/([^/]+)/))) ctx.name = (await q('select name from poll_topics where id = $1', [m[1]])).rows[0]?.name;
+    else if ((m = path.match(/^\/admins\/([^/]+)/))) ctx.admin = (await q('select name from admins where id = $1', [m[1]])).rows[0]?.name;
+  } catch (_) { /* o histórico nunca pode derrubar a ação */ }
+  return ctx;
+}
+
+async function logAdminAction(req, ctx) {
+  const hit = ADMIN_ACTIONS.find(([method, re]) => method === req.method && re.test(req.path));
+  const a = req.admin;
+  if (!hit || !a) return;
+  let detail = null;
+  try { detail = hit[3] ? hit[3](req.body, ctx) : null; } catch (_) { /* segue sem detalhe */ }
+  await q('insert into admin_log (admin_id, admin_name, action, detail) values ($1, $2, $3, $4)', [
+    a.id, a.owner ? 'Dono' : a.name, hit[2], detail ? String(detail).slice(0, 200) : null,
+  ]);
+  if (Math.random() < 0.02) await q("delete from admin_log where at < now() - interval '180 days'"); // guarda ~6 meses
+}
+
 app.use('/api/admin', (req, res, next) => {
-  if (req.method !== 'GET' && !QUIET_ADMIN_PATHS.has(req.path)) {
+  if (req.method === 'GET') return next();
+  if (!QUIET_ADMIN_PATHS.has(req.path)) {
     res.on('finish', () => {
       if (res.statusCode < 400) broadcast();
     });
   }
-  next();
+  actionContext(req.path).then((ctx) => {
+    res.on('finish', () => {
+      if (res.statusCode < 400) logAdminAction(req, ctx).catch((e) => console.error('[historico]', e.message));
+    });
+    next();
+  });
 });
 
 /* Avisa quem se inscreveu quando uma enquete nova é publicada. Inscrições
@@ -857,7 +1006,7 @@ async function notifyPrizeWon(userName, prizeName) {
    na enquete recebe "acertou +N" ou "dessa vez não deu". */
 async function notifyPollResult(pollId) {
   if (!PUSH_ENABLED || !(await getFlag('notify_result'))) return;
-  const { rows: pr } = await q('select title, points, correct_option_id, odds, max_win from polls where id = $1', [pollId]);
+  const { rows: pr } = await q('select title, points, correct_option_id, odds, pool_odds, max_win from polls where id = $1', [pollId]);
   const poll = pr[0];
   if (!poll || !poll.correct_option_id) return;
   const { rows } = await q(
@@ -887,8 +1036,15 @@ async function notifyPollResult(pollId) {
     }
     return;
   }
+  let gain = poll.points;
+  if (poll.pool_odds) {
+    // Prêmio fixo dividido: a parte de cada acertador
+    const w = (await q('select count(*)::int as n from votes where poll_id = $1 and option_id = $2', [pollId, poll.correct_option_id])).rows[0].n;
+    gain = Math.floor(poll.points / Math.max(1, w));
+    if (poll.max_win) gain = Math.min(gain, poll.max_win);
+  }
   await sendPush(rows.filter((r) => r.hit), {
-    title: '🎯 Você acertou!', body: `+${poll.points} pontos em "${title}"`, url: '/#ranking',
+    title: '🎯 Você acertou!', body: `+${gain} pontos em "${title}"`, url: '/#ranking',
   });
   await sendPush(rows.filter((r) => !r.hit), {
     title: 'Resultado da enquete', body: `"${title}" já tem resposta. Dessa vez não deu.`, url: '/',
@@ -927,7 +1083,21 @@ const requireUser = wrap(async (req, res, next) => {
   next();
 });
 const requireAdmin = wrap(async (req, res, next) => {
-  if (!(await hasSession(req, 'asid', 'admin'))) return res.status(401).json({ error: 'Acesso restrito ao admin.' });
+  req.admin = await getAdmin(req);
+  if (!req.admin) return res.status(401).json({ error: 'Acesso restrito ao admin.' });
+  next();
+});
+// Exige que o admin tenha ao menos uma das permissões listadas (o dono sempre passa)
+const requirePerm = (...keys) => wrap(async (req, res, next) => {
+  req.admin = await getAdmin(req);
+  if (!req.admin) return res.status(401).json({ error: 'Acesso restrito ao admin.' });
+  if (!keys.some((k) => can(req, k))) return res.status(403).json({ error: 'Seu nível de admin não permite esta ação.' });
+  next();
+});
+const requireOwner = wrap(async (req, res, next) => {
+  req.admin = await getAdmin(req);
+  if (!req.admin) return res.status(401).json({ error: 'Acesso restrito ao admin.' });
+  if (!req.admin.owner) return res.status(403).json({ error: 'Só o dono pode gerenciar admins.' });
   next();
 });
 const userView = (u) => ({ id: u.id, name: u.display_name, login: u.login, avatar: u.avatar_url });
@@ -1215,13 +1385,26 @@ app.get('/api/users/:id/profile', wrap(async (req, res) => {
 
 /* ---------- Admin ---------- */
 app.post('/api/admin/login', limit('admin', 10, 15 * 60 * 1000), wrap(async (req, res) => {
+  const name = String(req.body?.name ?? '').trim();
+  const password = String(req.body?.password ?? '');
+  if (name) {
+    // Admin com nível de acesso: nome + senha
+    const { rows } = await q('select id, password_hash from admins where lower(name) = lower($1)', [name]);
+    if (!rows[0] || !checkPassword(password, rows[0].password_hash)) {
+      return res.status(401).json({ error: 'Nome ou senha incorretos.' });
+    }
+    setCookie(res, 'asid', await createSession('admin', null, ADMIN_SESSION_MS, rows[0].id), ADMIN_SESSION_MS / 1000);
+    req.admin = { id: rows[0].id, name, owner: false };
+    return res.json({ ok: true });
+  }
   if (!ADMIN_PASSWORD) return res.status(503).json({ error: 'ADMIN_PASSWORD não está configurada no servidor.' });
-  const given = sha(String(req.body?.password ?? ''));
+  const given = sha(password);
   const expected = sha(ADMIN_PASSWORD);
   if (!crypto.timingSafeEqual(Buffer.from(given), Buffer.from(expected))) {
     return res.status(401).json({ error: 'Senha incorreta.' });
   }
   setCookie(res, 'asid', await createSession('admin', null, ADMIN_SESSION_MS), ADMIN_SESSION_MS / 1000);
+  req.admin = { id: null, name: 'Dono', owner: true };
   res.json({ ok: true });
 }));
 
@@ -1231,7 +1414,88 @@ app.post('/api/admin/logout', wrap(async (req, res) => {
 }));
 
 app.get('/api/admin/me', wrap(async (req, res) => {
-  res.json({ admin: await hasSession(req, 'asid', 'admin') });
+  const a = await getAdmin(req);
+  res.json(a ? adminView(a) : { admin: false });
+}));
+
+/* Gerenciar admins (só o dono) */
+const adminRow = (r) => ({ id: r.id, name: r.name, permissions: r.permissions, createdAt: iso(r.created_at) });
+
+function parseAdminInput(body, creating) {
+  const out = {};
+  if (creating || body?.name !== undefined) {
+    const name = String(body?.name ?? '').trim().replace(/\s+/g, ' ');
+    if (name.length < 2 || name.length > 30) return { error: 'O nome do admin precisa ter de 2 a 30 caracteres.' };
+    out.name = name;
+  }
+  if (creating || (body?.password !== undefined && body.password !== '')) {
+    const pw = String(body?.password ?? '');
+    if (pw.length < 8 || pw.length > 100) return { error: 'A senha precisa ter de 8 a 100 caracteres.' };
+    out.password = pw;
+  }
+  if (creating || body?.permissions !== undefined) {
+    const perms = Array.isArray(body?.permissions) ? body.permissions.map(String) : [];
+    if (perms.some((p) => !PERMISSION_KEYS.includes(p))) return { error: 'Permissão inválida.' };
+    out.permissions = [...new Set(perms)];
+  }
+  return out;
+}
+
+app.get('/api/admin/log', requireOwner, wrap(async (req, res) => {
+  const who = String(req.query.admin ?? '') || null;
+  const before = Number(req.query.before) || null;
+  const { rows } = await q(
+    `select id, at, admin_name, action, detail from admin_log
+     where ($1::text is null or admin_name = $1) and ($2::bigint is null or id < $2)
+     order by id desc limit 101`,
+    [who, before]
+  );
+  const names = (await q('select distinct admin_name from admin_log order by admin_name')).rows.map((r) => r.admin_name);
+  res.json({
+    entries: rows.slice(0, 100).map((r) => ({ id: r.id, at: iso(r.at), admin: r.admin_name, action: r.action, detail: r.detail })),
+    hasMore: rows.length > 100,
+    names,
+  });
+}));
+
+app.get('/api/admin/admins', requireOwner, wrap(async (req, res) => {
+  const { rows } = await q('select * from admins order by lower(name)');
+  res.json({ admins: rows.map(adminRow), catalog: PERMISSIONS });
+}));
+
+app.post('/api/admin/admins', requireOwner, wrap(async (req, res) => {
+  const input = parseAdminInput(req.body, true);
+  if (input.error) return res.status(400).json({ error: input.error });
+  const dup = await q('select 1 from admins where lower(name) = lower($1)', [input.name]);
+  if (dup.rowCount) return res.status(409).json({ error: 'Já existe um admin com esse nome.' });
+  await q('insert into admins (id, name, password_hash, permissions) values ($1, $2, $3, $4)', [
+    uid(), input.name, hashPassword(input.password), input.permissions,
+  ]);
+  res.status(201).json({ ok: true });
+}));
+
+app.put('/api/admin/admins/:id', requireOwner, wrap(async (req, res) => {
+  const input = parseAdminInput(req.body, false);
+  if (input.error) return res.status(400).json({ error: input.error });
+  const cur = await q('select id from admins where id = $1', [req.params.id]);
+  if (!cur.rowCount) return notFound(res);
+  if (input.name) {
+    const dup = await q('select 1 from admins where lower(name) = lower($1) and id <> $2', [input.name, req.params.id]);
+    if (dup.rowCount) return res.status(409).json({ error: 'Já existe um admin com esse nome.' });
+    await q('update admins set name = $2 where id = $1', [req.params.id, input.name]);
+  }
+  if (input.permissions) await q('update admins set permissions = $2 where id = $1', [req.params.id, input.permissions]);
+  if (input.password) {
+    await q('update admins set password_hash = $2 where id = $1', [req.params.id, hashPassword(input.password)]);
+    await q("delete from sessions where admin_id = $1 and kind = 'admin'", [req.params.id]); // senha nova = entra de novo
+  }
+  res.json({ ok: true });
+}));
+
+app.delete('/api/admin/admins/:id', requireOwner, wrap(async (req, res) => {
+  const r = await q('delete from admins where id = $1', [req.params.id]); // as sessões dele saem junto (cascade)
+  if (!r.rowCount) return notFound(res);
+  res.json({ ok: true });
 }));
 
 app.get('/api/admin/polls', requireAdmin, wrap(async (req, res) => {
@@ -1253,9 +1517,10 @@ app.get('/api/admin/polls', requireAdmin, wrap(async (req, res) => {
   });
 }));
 
-app.post('/api/admin/polls', requireAdmin, wrap(async (req, res) => {
+app.post('/api/admin/polls', requirePerm('polls_create'), wrap(async (req, res) => {
   const input = parsePollInput(req.body, true);
   if (input.error) return res.status(400).json({ error: input.error });
+  if ((input.odds || input.poolOdds) && !can(req, 'polls_odds')) return res.status(403).json({ error: 'Seu nível de admin não permite criar enquete com odd.' });
   // Proteção: não deixa criar outra enquete com o mesmo nome (ignora maiúsculas e espaços nas pontas)
   const dup = await q('select 1 from polls where lower(btrim(title)) = lower($1) limit 1', [input.title]);
   if (dup.rowCount) return res.status(409).json({ error: 'Já existe uma enquete com esse nome. Use outro nome.' });
@@ -1273,7 +1538,7 @@ app.post('/api/admin/polls', requireAdmin, wrap(async (req, res) => {
         [topicId]
       );
     }
-    await c.query('insert into polls (id, title, description, points, closes_at, topic_id, house, odds, max_stake, max_win) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)', [
+    await c.query('insert into polls (id, title, description, points, closes_at, topic_id, house, odds, max_stake, max_win, pool_odds) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)', [
       id,
       input.title,
       input.description,
@@ -1284,6 +1549,7 @@ app.post('/api/admin/polls', requireAdmin, wrap(async (req, res) => {
       input.odds,
       input.maxStake,
       input.maxWin,
+      input.poolOdds,
     ]);
     for (const [i, o] of input.options.entries()) {
       await c.query('insert into poll_options (id, poll_id, label, position) values ($1, $2, $3, $4)', [o.id, id, o.text, i]);
@@ -1299,18 +1565,28 @@ app.post('/api/admin/polls', requireAdmin, wrap(async (req, res) => {
 
 const notFound = (res) => res.status(404).json({ error: 'Enquete não encontrada.' });
 
-app.put('/api/admin/polls/:id', requireAdmin, wrap(async (req, res) => {
+app.put('/api/admin/polls/:id', requirePerm('polls_edit', 'polls_odds'), wrap(async (req, res) => {
   const input = parsePollInput(req.body, false);
   if (input.error) return res.status(400).json({ error: input.error });
   // Trocar entre enquete normal e com odd só é seguro enquanto ninguém votou
-  const cur = await q('select odds, (select count(*)::int from votes where poll_id = polls.id) as n from polls where id = $1', [req.params.id]);
+  const cur = await q('select odds, pool_odds, (select count(*)::int from votes where poll_id = polls.id) as n from polls where id = $1', [req.params.id]);
   if (!cur.rowCount) return notFound(res);
-  if (cur.rows[0].odds !== input.odds) {
+  {
+    // Nível de acesso: só deixa mudar o que o admin tem permissão de mudar
+    const [old] = await fetchPolls('where id = $1', [req.params.id]);
+    const minute = (d) => (d ? Math.floor(new Date(d).getTime() / 60000) : null);
+    const baseChanged = old.title !== input.title || (old.description || '') !== (input.description || '')
+      || old.points !== input.points || Boolean(old.house) !== input.house || minute(old.closesAt) !== minute(input.closesAt);
+    const oddsChanged = Boolean(old.odds) !== input.odds || Boolean(old.poolOdds) !== input.poolOdds || (old.maxStake || null) !== input.maxStake || (old.maxWin || null) !== input.maxWin;
+    if (baseChanged && !can(req, 'polls_edit')) return res.status(403).json({ error: 'Seu nível de admin não permite editar título, descrição, pontos, prazo ou casa.' });
+    if (oddsChanged && !can(req, 'polls_odds')) return res.status(403).json({ error: 'Seu nível de admin não permite mudar odd nem tetos de aposta.' });
+  }
+  if (cur.rows[0].odds !== input.odds || cur.rows[0].pool_odds !== input.poolOdds) {
     if (cur.rows[0].n > 0) return res.status(409).json({ error: 'Já existem votos nesta enquete: não dá mais pra ligar ou desligar a odd.' });
   }
   const r = await q(`update polls set title = $2, description = $3, points = $4,
       closing_notified = (closing_notified and closes_at is not distinct from $5::timestamptz), closes_at = $5,
-      house = $6, odds = $7, max_stake = $8, max_win = $9
+      house = $6, odds = $7, max_stake = $8, max_win = $9, pool_odds = $10
     where id = $1`, [
     req.params.id,
     input.title,
@@ -1321,13 +1597,14 @@ app.put('/api/admin/polls/:id', requireAdmin, wrap(async (req, res) => {
     input.odds,
     input.maxStake,
     input.maxWin,
+    input.poolOdds,
   ]);
   if (!r.rowCount) return notFound(res);
   res.json({ ok: true });
 }));
 
 /* Muda a enquete de tópico */
-app.post('/api/admin/polls/:id/topic', requireAdmin, wrap(async (req, res) => {
+app.post('/api/admin/polls/:id/topic', requirePerm('polls_edit'), wrap(async (req, res) => {
   const topicId = String(req.body?.topicId ?? '');
   const topic = await q('select id from poll_topics where id = $1', [topicId]);
   if (!topic.rowCount) return res.status(400).json({ error: 'Tópico inválido.' });
@@ -1345,7 +1622,7 @@ function parseTopicName(body) {
   return { name };
 }
 
-app.post('/api/admin/topics', requireAdmin, wrap(async (req, res) => {
+app.post('/api/admin/topics', requirePerm('topics'), wrap(async (req, res) => {
   const input = parseTopicName(req.body);
   if (input.error) return res.status(400).json({ error: input.error });
   const { rows } = await q('select count(*)::int as n, coalesce(max(position), -1)::int as maxpos from poll_topics');
@@ -1357,7 +1634,7 @@ app.post('/api/admin/topics', requireAdmin, wrap(async (req, res) => {
   res.status(201).json({ id });
 }));
 
-app.put('/api/admin/topics/:id', requireAdmin, wrap(async (req, res) => {
+app.put('/api/admin/topics/:id', requirePerm('topics'), wrap(async (req, res) => {
   const input = parseTopicName(req.body);
   if (input.error) return res.status(400).json({ error: input.error });
   const dup = await q('select 1 from poll_topics where lower(name) = lower($1) and id <> $2', [input.name, req.params.id]);
@@ -1367,7 +1644,7 @@ app.put('/api/admin/topics/:id', requireAdmin, wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
-app.delete('/api/admin/topics/:id', requireAdmin, wrap(async (req, res) => {
+app.delete('/api/admin/topics/:id', requirePerm('topics'), wrap(async (req, res) => {
   const t = await q('select count(*)::int as total, count(*) filter (where id = $1)::int as found from poll_topics', [req.params.id]);
   if (!t.rows[0].found) return res.status(404).json({ error: 'Tópico não encontrado.' });
   if (t.rows[0].total <= 1) return res.status(400).json({ error: 'Precisa existir pelo menos um tópico.' });
@@ -1380,7 +1657,7 @@ app.delete('/api/admin/topics/:id', requireAdmin, wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
-app.post('/api/admin/polls/:id/close', requireAdmin, wrap(async (req, res) => {
+app.post('/api/admin/polls/:id/close', requirePerm('polls_resolve'), wrap(async (req, res) => {
   const r = await q('update polls set closed = true where id = $1', [req.params.id]);
   if (!r.rowCount) return notFound(res);
   res.json({ ok: true });
@@ -1389,7 +1666,7 @@ app.post('/api/admin/polls/:id/close', requireAdmin, wrap(async (req, res) => {
 /* Reabrir votação. Se a enquete já tem resposta e soma pontos, o admin escolhe:
    - "keep": os pontos atuais ficam guardados no ranking e os votos são limpos (nova rodada);
    - "zero": os pontos desta enquete saem do ranking (inclusive rodadas guardadas antes). */
-app.post('/api/admin/polls/:id/reopen', requireAdmin, wrap(async (req, res) => {
+app.post('/api/admin/polls/:id/reopen', requirePerm('polls_resolve'), wrap(async (req, res) => {
   const choice = req.body?.points;
   const result = await tx(async (c) => {
     const { rows } = await c.query('select correct_option_id, counted from polls where id = $1 for update', [req.params.id]);
@@ -1445,7 +1722,7 @@ const upsertHouseVote = (pollId, userId, optionId) => q(
   [pollId, userId, optionId]
 );
 
-app.post('/api/admin/polls/:id/resolve', requireAdmin, wrap(async (req, res) => {
+app.post('/api/admin/polls/:id/resolve', requirePerm('polls_resolve'), wrap(async (req, res) => {
   let optionId;
   const pollRow = await q('select house from polls where id = $1', [req.params.id]);
   if (!pollRow.rowCount) return notFound(res);
@@ -1535,7 +1812,7 @@ app.get('/api/admin/house-accounts', requireAdmin, wrap(async (req, res) => {
   });
 }));
 
-app.post('/api/admin/house-accounts', requireAdmin, wrap(async (req, res) => {
+app.post('/api/admin/house-accounts', requirePerm('house'), wrap(async (req, res) => {
   const input = parseHouseInput(req.body);
   if (input.error) return res.status(400).json({ error: input.error });
   const id = uid();
@@ -1547,7 +1824,7 @@ app.post('/api/admin/house-accounts', requireAdmin, wrap(async (req, res) => {
   res.status(201).json({ id, name: input.name });
 }));
 
-app.put('/api/admin/house-accounts/:id', requireAdmin, wrap(async (req, res) => {
+app.put('/api/admin/house-accounts/:id', requirePerm('house'), wrap(async (req, res) => {
   const input = parseHouseInput(req.body);
   if (input.error) return res.status(400).json({ error: input.error });
   const r = await q('update users set display_name = $2, avatar_url = $3 where id = $1 and is_house', [
@@ -1557,13 +1834,13 @@ app.put('/api/admin/house-accounts/:id', requireAdmin, wrap(async (req, res) => 
   res.json({ ok: true });
 }));
 
-app.delete('/api/admin/house-accounts/:id', requireAdmin, wrap(async (req, res) => {
+app.delete('/api/admin/house-accounts/:id', requirePerm('house'), wrap(async (req, res) => {
   const r = await q('delete from users where id = $1 and is_house', [req.params.id]);
   if (!r.rowCount) return res.status(404).json({ error: 'Conta da casa não encontrada.' });
   res.json({ ok: true });
 }));
 
-app.post('/api/admin/polls/:id/visibility', requireAdmin, wrap(async (req, res) => {
+app.post('/api/admin/polls/:id/visibility', requirePerm('polls_visibility'), wrap(async (req, res) => {
   const r = await q('update polls set visible = $2 where id = $1', [req.params.id, Boolean(req.body?.visible)]);
   if (!r.rowCount) return notFound(res);
   res.json({ ok: true });
@@ -1572,7 +1849,7 @@ app.post('/api/admin/polls/:id/visibility', requireAdmin, wrap(async (req, res) 
 /* Excluir enquete. Se ela já tem resposta e soma pontos, o admin escolhe antes:
    - "keep": os pontos ficam guardados no ranking mesmo depois de apagada;
    - "zero": os pontos dela não entram no ranking. */
-app.delete('/api/admin/polls/:id', requireAdmin, wrap(async (req, res) => {
+app.delete('/api/admin/polls/:id', requirePerm('polls_delete'), wrap(async (req, res) => {
   const choice = req.body?.points;
   const result = await tx(async (c) => {
     const { rows } = await c.query('select correct_option_id, counted from polls where id = $1 for update', [req.params.id]);
@@ -1654,11 +1931,11 @@ async function closeWeek(extraResetKeys = []) {
 
 const podiumView = (podium) => podium.map((p) => ({ name: p.name, place: p.place, points: p.points }));
 
-app.post('/api/admin/ranking/reset-weekly', requireAdmin, wrap(async (req, res) => {
+app.post('/api/admin/ranking/reset-weekly', requirePerm('ranking'), wrap(async (req, res) => {
   res.json({ ok: true, podium: podiumView(await closeWeek()) });
 }));
 
-app.post('/api/admin/ranking/reset-general', requireAdmin, wrap(async (req, res) => {
+app.post('/api/admin/ranking/reset-general', requirePerm('ranking'), wrap(async (req, res) => {
   res.json({ ok: true, podium: podiumView(await closeWeek(['general_reset_at'])) });
 }));
 
@@ -1761,7 +2038,7 @@ app.get('/api/admin/prizes', requireAdmin, wrap(async (req, res) => {
   });
 }));
 
-app.post('/api/admin/prizes', requireAdmin, wrap(async (req, res) => {
+app.post('/api/admin/prizes', requirePerm('prizes'), wrap(async (req, res) => {
   const input = parsePrizeInput(req.body);
   if (input.error) return res.status(400).json({ error: input.error });
   const id = uid();
@@ -1771,7 +2048,7 @@ app.post('/api/admin/prizes', requireAdmin, wrap(async (req, res) => {
   res.status(201).json({ id });
 }));
 
-app.put('/api/admin/prizes/:id', requireAdmin, wrap(async (req, res) => {
+app.put('/api/admin/prizes/:id', requirePerm('prizes'), wrap(async (req, res) => {
   const input = parsePrizeInput(req.body);
   if (input.error) return res.status(400).json({ error: input.error });
   const r = await q('update prizes set name = $2, emoji = $3, image_url = $4, description = $6, points = $5 where id = $1',
@@ -1781,14 +2058,14 @@ app.put('/api/admin/prizes/:id', requireAdmin, wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
-app.delete('/api/admin/prizes/:id', requireAdmin, wrap(async (req, res) => {
+app.delete('/api/admin/prizes/:id', requirePerm('prizes'), wrap(async (req, res) => {
   const r = await q('delete from prizes where id = $1', [req.params.id]);
   if (!r.rowCount) return res.status(404).json({ error: 'Prêmio não encontrado.' });
   res.json({ ok: true });
 }));
 
 // Tira o prêmio de quem tem: fica sem dono, e a pessoa não o ganha de volta
-app.post('/api/admin/prizes/:id/remove', requireAdmin, wrap(async (req, res) => {
+app.post('/api/admin/prizes/:id/remove', requirePerm('prizes'), wrap(async (req, res) => {
   const done = await tx(async (c) => {
     const { rows } = await c.query('select holder_id from prizes where id = $1 for update', [req.params.id]);
     if (!rows[0]) return 'missing';
@@ -1803,7 +2080,7 @@ app.post('/api/admin/prizes/:id/remove', requireAdmin, wrap(async (req, res) => 
 }));
 
 // Libera de novo: o primeiro que já tiver (ou vier a ter) a pontuação leva, menos quem perdeu
-app.post('/api/admin/prizes/:id/release', requireAdmin, wrap(async (req, res) => {
+app.post('/api/admin/prizes/:id/release', requirePerm('prizes'), wrap(async (req, res) => {
   const cur = await q('select holder_id from prizes where id = $1', [req.params.id]);
   if (!cur.rowCount) return res.status(404).json({ error: 'Prêmio não encontrado.' });
   if (cur.rows[0].holder_id) return res.status(400).json({ error: 'Este prêmio já tem dono. Remova antes de liberar.' });
@@ -1839,16 +2116,19 @@ app.get('/api/admin/users', requireAdmin, wrap(async (req, res) => {
    Contas "is_test" entram no ranking como participantes comuns (com 🧪 no nome), podem
    votar/apostar pelo painel e são apagadas de uma vez com seus votos, pontos e emblemas. */
 const requireTests = wrap(async (req, res, next) => {
-  if (!(await hasSession(req, 'asid', 'admin'))) return res.status(401).json({ error: 'Acesso restrito ao admin.' });
-  if (!(await hasSession(req, 'tsid', 'tests'))) return res.status(403).json({ error: 'Digite a senha da aba Testes.', locked: true });
+  req.admin = await getAdmin(req);
+  if (!req.admin) return res.status(401).json({ error: 'Acesso restrito ao admin.' });
+  if (!can(req, 'tests')) return res.status(403).json({ error: 'Seu nível de admin não permite esta ação.' });
+  // 423 = aba trancada (falta a senha dela); 403 fica só para falta de permissão
+  if (!(await hasSession(req, 'tsid', 'tests'))) return res.status(423).json({ error: 'Digite a senha da aba Testes.', locked: true });
   next();
 });
 
-app.get('/api/admin/tests/status', requireAdmin, wrap(async (req, res) => {
+app.get('/api/admin/tests/status', requirePerm('tests'), wrap(async (req, res) => {
   res.json({ configured: Boolean(TESTS_PASSWORD), unlocked: await hasSession(req, 'tsid', 'tests') });
 }));
 
-app.post('/api/admin/tests/unlock', requireAdmin, limit('tests', 8, 15 * 60 * 1000), wrap(async (req, res) => {
+app.post('/api/admin/tests/unlock', requirePerm('tests'), limit('tests', 8, 15 * 60 * 1000), wrap(async (req, res) => {
   if (!TESTS_PASSWORD) return res.status(503).json({ error: 'TESTS_PASSWORD não está configurada no servidor.' });
   const given = sha(String(req.body?.password ?? ''));
   if (!crypto.timingSafeEqual(Buffer.from(given), Buffer.from(sha(TESTS_PASSWORD)))) {
@@ -1858,7 +2138,7 @@ app.post('/api/admin/tests/unlock', requireAdmin, limit('tests', 8, 15 * 60 * 10
   res.json({ ok: true });
 }));
 
-app.post('/api/admin/tests/lock', requireAdmin, wrap(async (req, res) => {
+app.post('/api/admin/tests/lock', requirePerm('tests'), wrap(async (req, res) => {
   await destroySession(req, res, 'tsid');
   res.json({ ok: true });
 }));
@@ -1944,7 +2224,7 @@ app.delete('/api/admin/test-users', requireTests, wrap(async (req, res) => {
 
 const realUser = async (id) => (await q('select id, banned from users where id = $1 and not is_house', [id])).rows[0];
 
-app.post('/api/admin/users/:id/ban', requireAdmin, wrap(async (req, res) => {
+app.post('/api/admin/users/:id/ban', requirePerm('users'), wrap(async (req, res) => {
   if (typeof req.body?.banned !== 'boolean') return res.status(400).json({ error: 'Informe banned como true ou false.' });
   const u = await realUser(req.params.id);
   if (!u) return res.status(404).json({ error: 'Participante não encontrado.' });
@@ -1954,7 +2234,7 @@ app.post('/api/admin/users/:id/ban', requireAdmin, wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
-app.post('/api/admin/users/:id/points', requireAdmin, wrap(async (req, res) => {
+app.post('/api/admin/users/:id/points', requirePerm('users'), wrap(async (req, res) => {
   const delta = Number(req.body?.delta);
   if (!Number.isInteger(delta) || delta === 0 || Math.abs(delta) > 100000) {
     return res.status(400).json({ error: 'Informe um valor inteiro diferente de zero (até 100000).' });
@@ -1976,7 +2256,7 @@ app.get('/api/admin/users/:id/adjustments', requireAdmin, wrap(async (req, res) 
   res.json({ adjustments: rows.map((r) => ({ id: String(r.id), delta: r.delta, note: r.note, createdAt: iso(r.created_at) })) });
 }));
 
-app.delete('/api/admin/adjustments/:id', requireAdmin, wrap(async (req, res) => {
+app.delete('/api/admin/adjustments/:id', requirePerm('users'), wrap(async (req, res) => {
   if (!/^\d+$/.test(req.params.id)) return res.status(404).json({ error: 'Ajuste não encontrado.' });
   const r = await q('delete from point_adjustments where id = $1', [req.params.id]);
   if (!r.rowCount) return res.status(404).json({ error: 'Ajuste não encontrado.' });
@@ -1984,14 +2264,14 @@ app.delete('/api/admin/adjustments/:id', requireAdmin, wrap(async (req, res) => 
   res.json({ ok: true });
 }));
 
-app.delete('/api/admin/hall/:id', requireAdmin, wrap(async (req, res) => {
+app.delete('/api/admin/hall/:id', requirePerm('ranking'), wrap(async (req, res) => {
   const r = await q('delete from hall_weeks where id = $1', [req.params.id]);
   if (!r.rowCount) return res.status(404).json({ error: 'Semana não encontrada.' });
   broadcast();
   res.json({ ok: true });
 }));
 
-app.post('/api/admin/settings', requireAdmin, wrap(async (req, res) => {
+app.post('/api/admin/settings', requirePerm('settings'), wrap(async (req, res) => {
   const { mode, streakEvery, streakBonus } = req.body || {};
   const entries = [];
   let rankingChanged = false;
@@ -2062,7 +2342,7 @@ function parseAchievementInput(body) {
   return { type, threshold, label, emoji, imageUrl: imageUrl || null };
 }
 
-app.post('/api/admin/achievements', requireAdmin, wrap(async (req, res) => {
+app.post('/api/admin/achievements', requirePerm('achievements'), wrap(async (req, res) => {
   const input = parseAchievementInput(req.body);
   if (input.error) return res.status(400).json({ error: input.error });
   const id = uid();
@@ -2074,7 +2354,7 @@ app.post('/api/admin/achievements', requireAdmin, wrap(async (req, res) => {
   res.status(201).json({ id });
 }));
 
-app.put('/api/admin/achievements/:id', requireAdmin, wrap(async (req, res) => {
+app.put('/api/admin/achievements/:id', requirePerm('achievements'), wrap(async (req, res) => {
   const input = parseAchievementInput(req.body);
   if (input.error) return res.status(400).json({ error: input.error });
   const r = await q(
@@ -2086,7 +2366,7 @@ app.put('/api/admin/achievements/:id', requireAdmin, wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
-app.post('/api/admin/achievements/:id/active', requireAdmin, wrap(async (req, res) => {
+app.post('/api/admin/achievements/:id/active', requirePerm('achievements'), wrap(async (req, res) => {
   if (typeof req.body?.active !== 'boolean') return res.status(400).json({ error: 'Informe active como true ou false.' });
   const r = await q('update achievement_defs set active = $2 where id = $1', [req.params.id, req.body.active]);
   if (!r.rowCount) return res.status(404).json({ error: 'Nível não encontrado.' });
@@ -2094,7 +2374,7 @@ app.post('/api/admin/achievements/:id/active', requireAdmin, wrap(async (req, re
   res.json({ ok: true });
 }));
 
-app.delete('/api/admin/achievements/:id', requireAdmin, wrap(async (req, res) => {
+app.delete('/api/admin/achievements/:id', requirePerm('achievements'), wrap(async (req, res) => {
   const r = await q('delete from achievement_defs where id = $1', [req.params.id]);
   if (!r.rowCount) return res.status(404).json({ error: 'Nível não encontrado.' });
   await q('delete from achievements where code = $1', [req.params.id]); // some com quem já tinha esse emblema
@@ -2103,7 +2383,7 @@ app.delete('/api/admin/achievements/:id', requireAdmin, wrap(async (req, res) =>
 }));
 
 /* Cópia dos dados em JSON (os dados já ficam no Supabase; isto é uma segurança extra) */
-app.get('/api/admin/backup', requireAdmin, wrap(async (req, res) => {
+app.get('/api/admin/backup', requirePerm('backup'), wrap(async (req, res) => {
   const [users, polls, options, votes, awards, settings] = await Promise.all([
     q('select * from users order by created_at'),
     q('select * from polls order by created_at'),

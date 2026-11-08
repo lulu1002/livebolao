@@ -77,10 +77,40 @@
     $('#admin-pass').focus();
   }
 
-  const ADMIN_TABS = ['create', 'polls', 'house', 'streak', 'ach', 'prizes', 'hall', 'users', 'tests', 'backup'];
+  const ADMIN_TABS = ['create', 'polls', 'house', 'streak', 'ach', 'prizes', 'hall', 'users', 'tests', 'admins', 'log', 'backup'];
+
+  // Nível de acesso de quem está logado (vem de /api/admin/me). O servidor confere tudo de novo; aqui só se esconde o que não vale.
+  let me = { owner: false, permissions: [], name: '' };
+  const can = (key) => me.owner || me.permissions.includes(key);
+
+  // Somente leitura: o admin sem permissão vê tudo, mas os controles ficam travados (inclusive os que aparecem depois, nas listas)
+  function lockEl(el) {
+    el.classList.add('readonly');
+    const run = () => el.querySelectorAll('button, input, select, textarea').forEach((c) => {
+      if (!c.closest('[data-keep]')) c.disabled = true;
+    });
+    run();
+    new MutationObserver(run).observe(el, { childList: true, subtree: true });
+    if (el.id.startsWith('apane-') || el.id === 'form-panel') {
+      el.prepend(h('p', { class: 'hint readonly-note' }, '👁️ Somente leitura: seu nível de admin não permite alterar aqui.'));
+    }
+  }
+
+  function applyPerms() {
+    // Abas de uso restrito (dono, testes, backup) ficam escondidas; o resto fica visível
+    document.querySelectorAll('[data-perm]').forEach((el) => {
+      const need = el.dataset.perm.split('|');
+      el.hidden = !(need.includes('owner') ? me.owner : need.some(can));
+    });
+    document.querySelectorAll('[data-need]').forEach((el) => {
+      if (!el.dataset.need.split('|').some(can)) lockEl(el);
+    });
+    $('#whoami').textContent = me.owner ? '👑 Dono' : `👤 ${me.name}`;
+    $('#whoami').hidden = false;
+  }
 
   function setAdminTab(tab) {
-    if (!ADMIN_TABS.includes(tab)) tab = 'polls';
+    if (!ADMIN_TABS.includes(tab) || $(`#atab-${tab}`).hidden) tab = 'polls';
     ADMIN_TABS.forEach((t) => {
       $(`#apane-${t}`).hidden = t !== tab;
       $(`#atab-${t}`).setAttribute('aria-selected', String(t === tab));
@@ -90,10 +120,15 @@
     if (tab === 'prizes') loadPrizes();
     if (tab === 'users') loadUsers();
     if (tab === 'tests') loadTests();
+    if (tab === 'admins') loadAdmins();
+    if (tab === 'log') loadLog(true);
   }
   ADMIN_TABS.forEach((t) => $(`#atab-${t}`).addEventListener('click', () => setAdminTab(t)));
 
-  function showPanel() {
+  function showPanel(info) {
+    me = { owner: Boolean(info.owner), permissions: info.permissions || [], name: info.name || '' };
+    applyPerms();
+    applyFormPerms();
     $('#login').hidden = true;
     $('#panel').hidden = false;
     $('#logout').hidden = false;
@@ -105,9 +140,9 @@
     e.preventDefault();
     $('#login-error').textContent = '';
     try {
-      await api('/api/admin/login', { method: 'POST', body: { password: $('#admin-pass').value } });
+      await api('/api/admin/login', { method: 'POST', body: { name: $('#admin-name').value, password: $('#admin-pass').value } });
       $('#admin-pass').value = '';
-      showPanel();
+      location.reload(); // recarrega já logado, com o nível de acesso novo e sem sobras de uma sessão anterior
     } catch (err) {
       $('#login-error').textContent = err.message;
     }
@@ -171,7 +206,7 @@
       h('span', { class: 'count' }, `${o.voters.length} ${o.voters.length === 1 ? 'voto' : 'votos'}`)));
 
     const meta = [
-      p.odds ? `🎲 odd · ${p.pool} pts apostados${p.maxStake ? ` · aposta máx. ${p.maxStake}` : ''}${p.maxWin ? ` · ganho máx. +${p.maxWin}` : ''}` : `${p.points} ${p.points === 1 ? 'ponto' : 'pontos'} por acerto`,
+      p.poolOdds ? `🎲 prêmio de ${p.points} pts dividido entre quem acertar${p.maxWin ? ` · ganho máx. +${p.maxWin}` : ''}` : p.odds ? `🎲 odd · ${p.pool} pts apostados${p.maxStake ? ` · aposta máx. ${p.maxStake}` : ''}${p.maxWin ? ` · ganho máx. +${p.maxWin}` : ''}` : `${p.points} ${p.points === 1 ? 'ponto' : 'pontos'} por acerto`,
       p.closesAt ? `encerra em ${fmtDate(p.closesAt)}` : 'sem prazo',
       `${p.totalVotes} ${p.totalVotes === 1 ? 'voto' : 'votos'}`,
     ].join(', ');
@@ -180,7 +215,7 @@
       h('div', { class: 'apoll-head' }, h('h3', {}, p.title),
         h('span', { class: 'pills' },
           p.house ? h('span', { class: 'pill' }, '🏠 Casa') : null,
-          p.odds ? h('span', { class: 'pill' }, '🎲 Odd') : null,
+          p.odds || p.poolOdds ? h('span', { class: 'pill' }, p.poolOdds ? '🎲 Prêmio dividido' : '🎲 Odd') : null,
           p.visible ? null : h('span', { class: 'pill' }, 'Fora da página'),
           h('span', { class: `pill ${p.status}` }, statusText(p)))),
       h('p', { class: 'meta' }, meta),
@@ -188,26 +223,28 @@
       p.houseWon
         ? h('p', { class: 'result house' }, `🏠 A casa ganhou: nenhuma opção bateu. +${p.points} pts pra cada conta da casa.`)
         : correct
-          ? h('p', { class: 'result' }, p.odds
+          ? h('p', { class: 'result' }, p.poolOdds
+            ? `Resposta certa: ${correct.text}. ${p.hits} de ${p.totalVotes} acertaram (+${p.hits ? Math.min(Math.floor(p.points / p.hits), p.maxWin || Infinity) : 0} pts cada).`
+            : p.odds
             ? `Resposta certa: ${correct.text}. ${p.hits} de ${p.totalVotes} acertaram (odd ${(p.hits ? p.totalVotes / p.hits : 0).toFixed(2)}x).`
             : `Resposta certa: ${correct.text}. ${p.hits} de ${p.totalVotes} acertaram (+${p.points} pts cada).`)
           : null,
-      h('fieldset', {}, h('legend', {}, 'Resposta certa'), options),
+      h('fieldset', { disabled: !can('polls_resolve') }, h('legend', {}, 'Resposta certa'), options),
       h('details', { class: 'voters' },
         h('summary', {}, `Quem votou (${p.totalVotes})`),
         p.options.map((o) => h('p', {}, h('b', {}, `${o.text}: `), o.voters.length ? o.voters.join(', ') : 'ninguém'))),
       h('div', { class: 'actions' },
-        h('button', { class: 'btn', type: 'button', onclick: () => confirmAnswer(p, article) },
+        can('polls_resolve') && h('button', { class: 'btn', type: 'button', onclick: () => confirmAnswer(p, article) },
           p.status === 'resolved' && !p.houseWon ? 'Atualizar resposta' : 'Confirmar resposta certa'),
-        h('button', { class: 'btn ghost', type: 'button', onclick: () => confirmHouse(p) }, '🏠 A casa ganha'),
-        p.status === 'open'
+        can('polls_resolve') && h('button', { class: 'btn ghost', type: 'button', onclick: () => confirmHouse(p) }, '🏠 A casa ganha'),
+        !can('polls_resolve') ? null : p.status === 'open'
           ? h('button', { class: 'btn ghost', type: 'button', onclick: () => act(() => api(`/api/admin/polls/${p.id}/close`, { method: 'POST' }), 'Votação encerrada') }, 'Encerrar votação')
           : h('button', { class: 'btn ghost', type: 'button', onclick: () => reopen(p) }, 'Reabrir votação'),
-        h('button', { class: 'btn ghost', type: 'button', onclick: () => act(() => api(`/api/admin/polls/${p.id}/visibility`, { method: 'POST', body: { visible: !p.visible } }), p.visible ? 'Enquete ocultada da página' : 'Enquete de volta na página') },
+        can('polls_visibility') && h('button', { class: 'btn ghost', type: 'button', onclick: () => act(() => api(`/api/admin/polls/${p.id}/visibility`, { method: 'POST', body: { visible: !p.visible } }), p.visible ? 'Enquete ocultada da página' : 'Enquete de volta na página') },
           p.visible ? 'Ocultar da página' : 'Mostrar na página'),
-        h('button', { class: 'btn ghost', type: 'button', onclick: () => moveTopic(p) }, 'Mover de tópico'),
-        h('button', { class: 'btn ghost', type: 'button', onclick: () => startEdit(p) }, 'Editar'),
-        h('button', { class: 'btn danger', type: 'button', onclick: () => remove(p) }, 'Excluir')));
+        can('polls_edit') && h('button', { class: 'btn ghost', type: 'button', onclick: () => moveTopic(p) }, 'Mover de tópico'),
+        (can('polls_edit') || can('polls_odds')) && h('button', { class: 'btn ghost', type: 'button', onclick: () => startEdit(p) }, 'Editar'),
+        can('polls_delete') && h('button', { class: 'btn danger', type: 'button', onclick: () => remove(p) }, 'Excluir')));
     return article;
   }
 
@@ -416,9 +453,28 @@
   /* ---------- Formulário (criar e editar) ---------- */
   // Os tetos só aparecem quando a enquete é com odd
   function syncOddsLimits() {
-    $('#f-odds-limits').hidden = !$('#f-odds').checked;
+    const on = $('#f-odds').checked;
+    const pool = $('#f-odds-kind').value === 'pool';
+    $('#f-odds-limits').hidden = !can('polls_odds') || !on;
+    $('#f-max-stake-field').hidden = pool;
+    document.querySelector('label[for=f-points]').textContent = on && pool ? 'Prêmio total (dividido entre quem acertar)' : 'Pontos por acerto';
+    $('#f-odds-kind-hint').textContent = pool
+      ? 'Os pontos acima viram um prêmio único: cada acertador leva o prêmio ÷ nº de acertadores (arredondado para baixo). Pouca gente na certa = parte grande; muita gente = parte pequena. Ninguém perde pontos.'
+      : 'Cada participante aposta pontos do próprio ranking. Quem acerta recebe aposta × odd (total de apostadores ÷ apostadores na opção); quem erra perde a aposta. Os “Pontos por acerto” só valem se a casa ganhar.';
+    $('#f-max-win-hint').textContent = pool
+      ? 'Teto da parte de cada acertador. Em branco, sem teto.'
+      : 'Teto do lucro líquido de quem acertar. Em branco, o prêmio é só aposta × odd.';
+  }
+  // Mostra só o que o nível do admin permite mexer: ao editar, os campos básicos pedem "editar enquetes" e a odd pede "definir odd"
+  function applyFormPerms() {
+    const lockBase = Boolean(state.editing) && !can('polls_edit');
+    ['#f-title', '#f-desc', '#f-points', '#f-closes', '#f-house'].forEach((s) => { $(s).disabled = lockBase; });
+    $('#f-odds').closest('.field').hidden = !can('polls_odds');
+    $('#form-submit').disabled = !state.editing && !can('polls_create'); // sem permissão de criar, só edita
+    syncOddsLimits();
   }
   $('#f-odds').addEventListener('change', syncOddsLimits);
+  $('#f-odds-kind').addEventListener('change', syncOddsLimits);
 
   function resetForm() {
     state.editing = null;
@@ -426,9 +482,10 @@
     $('#f-points').value = 10;
     $('#f-house').checked = false;
     $('#f-odds').checked = false;
+    $('#f-odds-kind').value = 'stake';
     $('#f-max-stake').value = '';
     $('#f-max-win').value = '';
-    syncOddsLimits();
+    applyFormPerms();
     $('#f-options').disabled = false;
     $('#f-options-hint').textContent = 'De 1 a 10 opções, uma por linha.';
     $('#form-title').textContent = 'Nova enquete';
@@ -449,10 +506,11 @@
     $('#f-options-hint').textContent = 'As opções não podem ser alteradas depois de publicar.';
     $('#f-points').value = p.points;
     $('#f-house').checked = Boolean(p.house);
-    $('#f-odds').checked = Boolean(p.odds);
+    $('#f-odds').checked = Boolean(p.odds || p.poolOdds);
+    $('#f-odds-kind').value = p.poolOdds ? 'pool' : 'stake';
     $('#f-max-stake').value = p.maxStake || '';
     $('#f-max-win').value = p.maxWin || '';
-    syncOddsLimits();
+    applyFormPerms();
     $('#f-closes').value = toLocalInput(p.closesAt);
     $('#f-notify-field').hidden = true; // editar não envia notificação
     $('#form-title').textContent = 'Editar enquete';
@@ -499,7 +557,8 @@
       points: $('#f-points').value,
       closesAt: closes ? new Date(closes).toISOString() : null,
       house: $('#f-house').checked,
-      odds: $('#f-odds').checked,
+      odds: $('#f-odds').checked && $('#f-odds-kind').value === 'stake',
+      poolOdds: $('#f-odds').checked && $('#f-odds-kind').value === 'pool',
       maxStake: $('#f-max-stake').value,
       maxWin: $('#f-max-win').value,
     };
@@ -833,6 +892,133 @@
   bindFlag('#notify-result', 'notifyResult', 'notifyResult', 'Aviso de resultado ligado', 'Aviso de resultado desligado', renderNotify);
   bindFlag('#notify-closing', 'notifyClosing', 'notifyClosing', 'Lembrete de enquete fechando ligado', 'Lembrete de enquete fechando desligado', renderNotify);
 
+  /* ---------- Admins e níveis de acesso (só o dono) ---------- */
+  const adm = { list: [], catalog: [], editing: null };
+  const PRESETS = [
+    ['Editor de enquetes', ['polls_create', 'polls_edit', 'polls_visibility', 'topics']],
+    ['Moderador', ['polls_resolve', 'polls_visibility', 'users']],
+    ['Todas as permissões', 'all'],
+    ['Nenhuma', []],
+  ];
+
+  function setAdmPerms(keys) {
+    document.querySelectorAll('#adm-perms input[type=checkbox]').forEach((c) => { c.checked = keys.includes(c.value); });
+  }
+  const getAdmPerms = () => [...document.querySelectorAll('#adm-perms input[type=checkbox]:checked')].map((c) => c.value);
+
+  function renderAdminForm() {
+    const groups = [...new Set(adm.catalog.map((c) => c.group))];
+    $('#adm-perms').replaceChildren(...groups.map((g) => h('fieldset', { class: 'modes' },
+      h('legend', {}, g),
+      adm.catalog.filter((c) => c.group === g).map((c) => h('label', { class: 'aopt' },
+        h('input', { type: 'checkbox', value: c.key }), h('span', {}, c.label))))));
+    $('#adm-presets').replaceChildren(...PRESETS.map(([label, keys]) => h('button', {
+      class: 'btn ghost small', type: 'button',
+      onclick: () => setAdmPerms(keys === 'all' ? adm.catalog.map((c) => c.key) : keys),
+    }, label)));
+  }
+
+  function resetAdminForm() {
+    adm.editing = null;
+    $('#admin-form').reset();
+    $('#admin-form-title').textContent = 'Novo admin';
+    $('#adm-pass-label').textContent = 'Senha (mínimo 8 caracteres)';
+    $('#adm-pass').required = true;
+    $('#adm-save').textContent = 'Criar admin';
+    $('#adm-cancel').hidden = true;
+    $('#adm-error').textContent = '';
+    setAdmPerms([]);
+  }
+
+  function renderAdmins() {
+    const box = $('#admin-list');
+    if (!adm.list.length) { box.replaceChildren(h('p', { class: 'hint' }, 'Nenhum admin além de você ainda.')); return; }
+    const label = new Map(adm.catalog.map((c) => [c.key, c.label]));
+    box.replaceChildren(...adm.list.map((a) => h('div', { class: 'house-row' },
+      h('span', { class: 'nm', title: a.permissions.map((k) => label.get(k) || k).join('\n') },
+        h('b', {}, a.name), ` · ${a.permissions.length} de ${adm.catalog.length} permissões`),
+      h('button', { class: 'btn ghost small', type: 'button', onclick: () => editAdmin(a) }, 'Editar'),
+      h('button', { class: 'btn danger small', type: 'button', onclick: () => removeAdmin(a) }, 'Excluir'))));
+  }
+
+  function editAdmin(a) {
+    adm.editing = a.id;
+    $('#adm-name').value = a.name;
+    $('#adm-pass').value = '';
+    $('#adm-pass').required = false;
+    $('#adm-pass-label').textContent = 'Nova senha (deixe em branco para manter a atual)';
+    $('#admin-form-title').textContent = `Editar ${a.name}`;
+    $('#adm-save').textContent = 'Salvar';
+    $('#adm-cancel').hidden = false;
+    $('#adm-error').textContent = '';
+    setAdmPerms(a.permissions);
+    $('#admin-form').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  async function removeAdmin(a) {
+    if (!confirm(`Excluir o admin "${a.name}"? Ele perde o acesso na hora.`)) return;
+    await act(() => api(`/api/admin/admins/${a.id}`, { method: 'DELETE' }), 'Admin excluído');
+    if (adm.editing === a.id) resetAdminForm();
+    loadAdmins();
+  }
+
+  async function loadAdmins() {
+    try {
+      const data = await api('/api/admin/admins');
+      adm.list = data.admins;
+      if (!adm.catalog.length) { adm.catalog = data.catalog; renderAdminForm(); resetAdminForm(); }
+      renderAdmins();
+    } catch (e) {
+      handleError(e);
+    }
+  }
+
+  $('#admin-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    $('#adm-error').textContent = '';
+    const body = { name: $('#adm-name').value, permissions: getAdmPerms() };
+    if ($('#adm-pass').value) body.password = $('#adm-pass').value;
+    try {
+      if (adm.editing) await api(`/api/admin/admins/${adm.editing}`, { method: 'PUT', body });
+      else await api('/api/admin/admins', { method: 'POST', body });
+      toast(adm.editing ? 'Admin atualizado' : 'Admin criado');
+      resetAdminForm();
+      loadAdmins();
+    } catch (err) {
+      if (err.status === 401) handleError(err);
+      else $('#adm-error').textContent = err.message;
+    }
+  });
+  $('#adm-cancel').addEventListener('click', resetAdminForm);
+
+  /* ---------- Histórico de ações (só o dono) ---------- */
+  const logState = { last: null };
+
+  async function loadLog(reset) {
+    if (reset) { logState.last = null; $('#log-list').replaceChildren(); }
+    try {
+      const qs = new URLSearchParams();
+      if ($('#log-filter').value) qs.set('admin', $('#log-filter').value);
+      if (logState.last) qs.set('before', logState.last);
+      const data = await api(`/api/admin/log?${qs}`);
+      const sel = $('#log-filter');
+      const current = sel.value;
+      sel.replaceChildren(h('option', { value: '' }, 'Todos'), ...data.names.map((n) => h('option', { value: n }, n)));
+      sel.value = data.names.includes(current) ? current : '';
+      $('#log-list').append(...data.entries.map((e) => h('div', { class: 'house-row' },
+        h('span', { class: 'nm' },
+          h('b', {}, e.action), e.detail ? ` · ${e.detail}` : '',
+          h('br'), h('small', {}, `${e.admin === 'Dono' ? '👑 Dono' : `👤 ${e.admin}`} · ${fmtDate(e.at)}`)))));
+      if (!$('#log-list').children.length) $('#log-list').append(h('p', { class: 'hint' }, 'Nenhuma ação registrada ainda.'));
+      if (data.entries.length) logState.last = data.entries[data.entries.length - 1].id;
+      $('#log-more').hidden = !data.hasMore;
+    } catch (e) {
+      handleError(e);
+    }
+  }
+  $('#log-filter').addEventListener('change', () => loadLog(true));
+  $('#log-more').addEventListener('click', () => loadLog(false));
+
   /* ---------- Painel de testes ---------- */
   const tests = { users: [] };
 
@@ -884,7 +1070,7 @@
       tests.users = data.users;
       renderTests();
     } catch (e) {
-      if (e.status === 403) showTestsLock();
+      if (e.status === 423) showTestsLock();
       else handleError(e);
     }
   }
@@ -915,7 +1101,7 @@
       await loadTests();
     } catch (e) {
       if (e.status === 401) handleError(e);
-      else if (e.status === 403) showTestsLock();
+      else if (e.status === 423) showTestsLock();
       else $('#test-error').textContent = e.message;
     }
   }
@@ -1268,8 +1454,8 @@
   /* ---------- Início ---------- */
   (async function init() {
     try {
-      const { admin } = await api('/api/admin/me');
-      if (admin) showPanel();
+      const info = await api('/api/admin/me');
+      if (info.admin) showPanel(info);
       else showLogin();
     } catch (e) {
       showLogin();

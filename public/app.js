@@ -253,8 +253,10 @@
           h('a', { class: 'linkish', href: '/auth/twitch' }, 'Entrar'));
       }
       if (p.odds) return null; // o quadro de aposta já explica tudo
-      return h('p', { class: 'note' },
-        p.myVote ? (state.lockVotes ? 'Palpite registrado. Não é possível trocar o voto.' : 'Palpite registrado. Você pode trocar até a votação encerrar.') : 'Toque em uma opção para dar seu palpite.');
+      if (p.myVote) return h('p', { class: 'note' }, state.lockVotes ? 'Palpite registrado. Não é possível trocar o voto.' : 'Palpite registrado. Você pode trocar até a votação encerrar.');
+      return h('p', { class: 'note' }, p.poolOdds
+        ? `Toque em uma opção para dar seu palpite. Os ${p.points} pontos da enquete são divididos entre quem acertar: quanto menos gente na opção certa, maior a sua parte.`
+        : 'Toque em uma opção para dar seu palpite.');
     }
     if (!state.user) return null;
     if (!p.myVote) return h('p', { class: 'note' }, 'Você não votou nesta enquete.');
@@ -356,6 +358,9 @@
     if (p.odds && isOpen) {
       btn.append(h('span', { class: 'opt-meta' }, `${o.votes} ${o.votes === 1 ? 'aposta' : 'apostas'} · `, h('b', { class: 'odd' }, `${oddLabel(o.odd)}x`)));
     }
+    if (p.poolOdds && isOpen) {
+      btn.append(h('span', { class: 'opt-meta' }, `${o.votes} ${o.votes === 1 ? 'voto' : 'votos'} · `, h('b', { class: 'odd' }, `~${o.share} pts`)));
+    }
     if (!isOpen) {
       const total = p.totalVotes || 0;
       const pct = total ? Math.round((o.votes / total) * 100) : 0;
@@ -374,6 +379,8 @@
         h('div', { class: 'pts' },
           p.odds
             ? [h('span', { class: 'pts-n' }, '🎲'), h('span', { class: 'pts-l' }, 'odd')]
+            : p.poolOdds
+            ? [h('span', { class: 'pts-n' }, p.points), h('span', { class: 'pts-l' }, 'pontos divididos')]
             : [h('span', { class: 'pts-n' }, p.points), h('span', { class: 'pts-l' }, p.points === 1 ? 'ponto' : 'pontos')]),
         h('span', { class: `pill ${p.status}` }, statusText),
         p.houseWon ? h('span', { class: 'pill house' }, '🏠 Casa venceu') : null,

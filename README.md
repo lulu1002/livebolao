@@ -13,11 +13,25 @@ Ao criar uma enquete no admin, marque **Enquete com odd** (cada enquete decide; 
 
 - O participante escolhe uma opção e aposta pontos do **ranking geral** (saldo = total de pontos menos o que já está apostado em enquetes sem resultado). Pode trocar a aposta até a votação encerrar (a menos que a Trava de voto esteja ligada).
 - Odd = total de apostadores ÷ apostadores na opção. Quem acerta recebe `aposta × odd` (ganho líquido = isso − aposta); quem erra perde a aposta. Pouca gente na opção certa = prêmio alto; muita gente = prêmio baixo; todo mundo na mesma opção = devolve a aposta.
+- **Dois tipos de odd** (escolha ao marcar “Enquete com odd”): **Aposta** (acima) ou **Prêmio fixo**. No prêmio fixo ninguém usa pontos do próprio ranking: o admin define os pontos da enquete (campo “Prêmio total”) e eles são divididos entre quem acertar (prêmio ÷ nº de acertadores, arredondado para baixo). Pouca gente na opção certa = parte grande; muita gente = parte pequena; quem erra não perde nada. O “Ganho máximo por pessoa” também vale aqui. Se a casa ganhar, o prêmio é dividido entre as contas da casa escolhidas.
 - O admin pode definir, por enquete, uma **aposta máxima** e um **ganho máximo** por pessoa (campos opcionais; em branco = sem limite). O ganho máximo limita o lucro líquido de quem acertar.
 - Se a casa ganhar ("ninguém acertou"), os apostadores perdem a aposta e as contas da casa escolhidas recebem os "Pontos por acerto" da enquete.
 - O ganho/perda entra no ranking geral e no semanal; reabrir ou apagar a enquete mantendo/zerando pontos funciona igual às enquetes normais.
 - Só dá para ligar/desligar a odd de uma enquete antes do primeiro voto.
 - O banco é atualizado sozinho no deploy (colunas `polls.odds`, `polls.max_stake`, `polls.max_win`, `votes.stake`, `awards.gain`).
+
+## Admins com níveis de acesso
+
+Quem entra com a senha do servidor (`ADMIN_PASSWORD`, deixando o campo "Nome" em branco) é o **dono**: acesso total e único que cria admins. Na aba **🔑 Admins** o dono cadastra outros admins (nome + senha, mínimo 8 caracteres) e marca o que cada um pode fazer:
+
+- **Enquetes:** criar; editar título/descrição/pontos/prazo/casa/tópico; definir odd e tetos; encerrar, reabrir e definir a resposta certa; ocultar/mostrar; excluir.
+- **Outros:** tópicos, contas da casa, usuários (banir/pontos), rankings e pódio, prêmios, conquistas, configurações gerais, aba de testes (que ainda pede a própria senha) e backup.
+
+Admins sem permissão **veem tudo em modo somente leitura** (as abas ficam visíveis, com os campos e botões travados e um aviso). Ficam de fora, só para quem tem permissão: as abas Testes e Backup, e Admins e Histórico (só o dono). Há modelos rápidos (Editor de enquetes, Moderador, Todas, Nenhuma). Mudar permissões vale na hora; trocar a senha desconecta o admin; excluir tira o acesso imediatamente. O servidor recusa qualquer ação sem permissão (a tela só esconde os botões). Um admin sem "definir odd" não consegue mudar a odd nem os tetos, mesmo podendo editar o resto da enquete.
+
+### Histórico de ações
+
+Toda ação que muda algo no painel (criar/editar/encerrar/excluir enquete, resultado, pontos, banimentos, configurações, admins…) é registrada com quem fez, o quê e quando. O dono vê na aba **📜 Histórico** (filtro por admin, “carregar mais”). Registros com mais de 6 meses são apagados automaticamente. Senhas e o conteúdo das apostas/contas de teste não entram.
 
 ## Trava de voto
 

@@ -20,6 +20,7 @@
       <div class="actions">
         <button id="theme-toggle" class="icon-btn" type="button" title="Mudar o tema" aria-label="Mudar o tema">🌙</button>
         <a class="btn ghost small" href="/">Ver o site</a>
+        <span class="hint" id="whoami" hidden></span>
         <button class="btn ghost small" id="logout" type="button" hidden>Sair</button>
       </div>
     </div>
@@ -29,6 +30,11 @@
     <section id="login" class="panel narrow" hidden>
       <h1>Acesso do admin</h1>
       <form id="login-form">
+        <div class="field">
+          <label for="admin-name">Nome do admin</label>
+          <input id="admin-name" autocomplete="username" maxlength="30" placeholder="Usuario">
+          <span class="hint"></span>
+        </div>
         <div class="field">
           <label for="admin-pass">Senha do admin</label>
           <input id="admin-pass" type="password" autocomplete="current-password" required>
@@ -48,25 +54,27 @@
         <button type="button" role="tab" id="atab-prizes" aria-controls="apane-prizes" aria-selected="false">🏅 Prêmio</button>
         <button type="button" role="tab" id="atab-hall" aria-controls="apane-hall" aria-selected="false">🏆pódio semanal</button>
         <button type="button" role="tab" id="atab-users" aria-controls="apane-users" aria-selected="false">👥 Os meliantes </button>
-        <button type="button" role="tab" id="atab-tests" aria-controls="apane-tests" aria-selected="false">🧪 Testes</button>
-        <button type="button" role="tab" id="atab-backup" aria-controls="apane-backup" aria-selected="false">Backup</button>
+        <button type="button" role="tab" id="atab-tests" data-perm="tests" aria-controls="apane-tests" aria-selected="false">🧪 Testes</button>
+        <button type="button" role="tab" id="atab-admins" aria-controls="apane-admins" aria-selected="false" data-perm="owner">🔑 Admins</button>
+        <button type="button" role="tab" id="atab-log" aria-controls="apane-log" aria-selected="false" data-perm="owner">📜 Histórico</button>
+        <button type="button" role="tab" id="atab-backup" data-perm="backup" aria-controls="apane-backup" aria-selected="false">Backup</button>
       </nav>
 
       <div id="apane-create" role="tabpanel" aria-labelledby="atab-create" hidden>
-        <section class="panel narrow-md" id="form-panel">
+        <section class="panel narrow-md" id="form-panel" data-need="polls_create|polls_edit|polls_odds">
           <h2 id="form-title">Nova enquete</h2>
-          <fieldset class="modes">
+          <fieldset class="modes" data-need="settings">
             <legend>Ao publicar uma nova enquete (vale dentro do mesmo tópico)</legend>
             <label class="aopt"><input type="radio" name="mode" value="replace"><span>Substituir a enquete do mesmo tópico na página principal</span></label>
             <label class="aopt"><input type="radio" name="mode" value="accumulate"><span>Acumular com as anteriores</span></label>
             <span class="hint">Enquetes substituídas saem da página, mas continuam aqui no painel e valem pontos quando você define a resposta.</span>
           </fieldset>
-          <fieldset class="modes">
+          <fieldset class="modes" data-need="settings">
             <legend>Trava de voto</legend>
             <label class="aopt"><input type="checkbox" id="lock-votes"><span>🔒 Não deixar o participante trocar o voto: votou, está votado</span></label>
             <span class="hint">Vale para todas as enquetes (normais e com odd), inclusive as que já têm votos. Desligado, dá para trocar o voto até a votação encerrar.</span>
           </fieldset>
-          <fieldset class="modes">
+          <fieldset class="modes" data-need="settings">
             <legend>Notificações</legend>
             <label class="aopt"><input type="checkbox" id="notify-global"><span>Enquete nova: avisar os inscritos quando for publicada</span></label>
             <span class="hint" id="notify-global-hint">Chave geral: desligada, nenhuma publicação envia notificação, mesmo com a caixa da enquete marcada.</span>
@@ -107,13 +115,21 @@
             </div>
             <div id="f-odds-limits" hidden>
               <div class="field">
+                <label for="f-odds-kind">Tipo de odd</label>
+                <select id="f-odds-kind">
+                  <option value="stake">Aposta: cada participante usa pontos do próprio ranking</option>
+                  <option value="pool">Prêmio fixo: os pontos da enquete são divididos entre quem acertar</option>
+                </select>
+                <span class="hint" id="f-odds-kind-hint"></span>
+              </div>
+              <div class="field" id="f-max-stake-field">
                 <label for="f-max-stake">Aposta máxima por pessoa (pontos, opcional)</label>
                 <input id="f-max-stake" type="number" min="1" step="1" placeholder="Sem limite">
               </div>
               <div class="field">
                 <label for="f-max-win">Ganho máximo por pessoa (pontos, opcional)</label>
                 <input id="f-max-win" type="number" min="1" step="1" placeholder="Sem limite">
-                <span class="hint">Teto do lucro líquido de quem acertar. Em branco, o prêmio é só aposta × odd.</span>
+                <span class="hint" id="f-max-win-hint">Teto do lucro líquido de quem acertar. Em branco, o prêmio é só aposta × odd.</span>
               </div>
             </div>
             <div class="field" id="f-notify-field">
@@ -132,7 +148,7 @@
       <div id="apane-polls" role="tabpanel" aria-labelledby="atab-polls">
         <div class="list-head">
           <h2 class="list-title" id="list-title">Enquetes</h2>
-          <div class="actions">
+          <div class="actions" data-need="ranking">
             <button class="btn ghost small" id="reset-weekly" type="button">Zerar semanal</button>
             <button class="btn danger small" id="reset-general" type="button">Zerar geral</button>
           </div>
@@ -140,7 +156,7 @@
         <div class="subtabs admin-subtabs" id="topic-tabs" role="tablist" aria-label="Tópicos das enquetes"></div>
         <div id="poll-list" class="alist"></div>
 
-        <details class="panel narrow-md" id="topics-panel">
+        <details class="panel narrow-md" id="topics-panel" data-need="topics">
           <summary>⚙️ Gerenciar tópicos</summary>
           <p class="hint">Os tópicos viram as divisórias da página principal (ex.: Geral, Casa). Ao criar uma enquete você escolhe o tópico; dá para mudar depois no botão Mover. Só dá para apagar um tópico vazio.</p>
           <div id="topic-list" class="alist"></div>
@@ -155,7 +171,7 @@
         </details>
       </div>
 
-      <div id="apane-house" role="tabpanel" aria-labelledby="atab-house" hidden>
+      <div id="apane-house" data-need="house" role="tabpanel" aria-labelledby="atab-house" hidden>
       <section class="panel" id="house-panel">
         <h2>🏠 Contas da casa</h2>
         <p class="hint">Quando nenhuma opção bate, resolva a enquete como "🏠 A casa ganha" e escolha pra qual(is) dessas contas os pontos vão.</p>
@@ -181,7 +197,7 @@
       </section>
       </div>
 
-      <div id="apane-streak" role="tabpanel" aria-labelledby="atab-streak" hidden>
+      <div id="apane-streak" data-need="settings" role="tabpanel" aria-labelledby="atab-streak" hidden>
       <section class="panel narrow-md" id="streak-panel">
         <h2>Bônus de sequência</h2>
         <form id="streak-form">
@@ -202,7 +218,7 @@
       </section>
       </div>
 
-      <div id="apane-ach" role="tabpanel" aria-labelledby="atab-ach" hidden>
+      <div id="apane-ach" data-need="achievements" role="tabpanel" aria-labelledby="atab-ach" hidden>
       <section class="panel" id="ach-panel">
         <h2>Conquistas</h2>
         <p class="hint"></p>
@@ -251,7 +267,7 @@
       </section>
       </div>
 
-      <div id="apane-prizes" role="tabpanel" aria-labelledby="atab-prizes" hidden>
+      <div id="apane-prizes" data-need="prizes" role="tabpanel" aria-labelledby="atab-prizes" hidden>
       <section class="panel" id="prize-panel">
         <h2>Prêmios</h2>
         <p class="hint">Cada prêmio tem um só dono: a primeira pessoa a chegar nos pontos do ranking geral leva, e quem chegar depois não ganha.</p>
@@ -293,13 +309,13 @@
       </section>
       </div>
 
-      <div id="apane-users" role="tabpanel" aria-labelledby="atab-users" hidden>
+      <div id="apane-users" data-need="users" role="tabpanel" aria-labelledby="atab-users" hidden>
       <section class="panel" id="users-panel">
         <h2>👥 Usuários</h2>
         <p class="hint">Aqui altera os pontos dos meliantes e pune o malandro.</p>
         <div class="field">
           <label for="user-search">Buscar</label>
-          <input id="user-search" type="search" placeholder="Nome ou login" autocomplete="off">
+          <input id="user-search" data-keep type="search" placeholder="Nome ou login" autocomplete="off">
         </div>
         <div id="user-list" class="ach-admin-list"></div>
       </section>
@@ -347,7 +363,40 @@
       </section>
       </div>
 
-      <div id="apane-hall" role="tabpanel" aria-labelledby="atab-hall" hidden>
+      <div id="apane-admins" role="tabpanel" aria-labelledby="atab-admins" hidden>
+      <section class="panel narrow-md">
+        <h2>🔑 Admins e níveis de acesso</h2>
+        <p class="hint">Você é o dono (entra só com a senha do servidor) e tem acesso a tudo. Cada admin entra com nome + senha e só faz o que estiver marcado aqui. Mudar as permissões vale na hora, sem ele precisar sair.</p>
+        <div id="admin-list" class="alist"></div>
+        <form id="admin-form">
+          <h3 id="admin-form-title">Novo admin</h3>
+          <div class="field"><label for="adm-name">Nome (usado para entrar)</label><input id="adm-name" maxlength="30" required autocomplete="off"></div>
+          <div class="field"><label for="adm-pass" id="adm-pass-label">Senha (mínimo 8 caracteres)</label><input id="adm-pass" type="password" autocomplete="new-password"></div>
+          <div class="field"><label>Modelos rápidos</label><div class="actions" id="adm-presets"></div></div>
+          <div id="adm-perms"></div>
+          <p class="error" id="adm-error" role="alert"></p>
+          <div class="actions">
+            <button class="btn" type="submit" id="adm-save">Criar admin</button>
+            <button class="btn ghost" type="button" id="adm-cancel" hidden>Cancelar</button>
+          </div>
+        </form>
+      </section>
+      </div>
+
+      <div id="apane-log" role="tabpanel" aria-labelledby="atab-log" hidden>
+      <section class="panel narrow-md">
+        <h2>📜 Histórico de ações</h2>
+        <p class="hint">Quem fez o quê no painel (os 6 meses mais recentes). Só o dono vê esta aba. Senhas nunca são registradas.</p>
+        <div class="field">
+          <label for="log-filter">Filtrar por admin</label>
+          <select id="log-filter"><option value="">Todos</option></select>
+        </div>
+        <div id="log-list" class="alist"></div>
+        <div class="actions"><button class="btn ghost" id="log-more" type="button" hidden>Carregar mais</button></div>
+      </section>
+      </div>
+
+      <div id="apane-hall" data-need="ranking" role="tabpanel" aria-labelledby="atab-hall" hidden>
       <section class="panel narrow-md" id="hall-panel">
         <h2>hall da fama</h2>
         <p class="hint">O pódio (1º ao 3º) de cada semana é gravado quando você clica em Zerar semanal ou Zerar geral.</p>

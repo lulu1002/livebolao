@@ -272,12 +272,41 @@ create table if not exists sessions (
 );
 create index if not exists sessions_expires_idx on sessions(expires_at);
 
+-- Admins com níveis de acesso. O "dono" é quem entra com ADMIN_PASSWORD (tudo liberado e é o único
+-- que cria/edita admins). Os demais entram com nome + senha e só fazem o que está em 'permissions'.
+create table if not exists admins (
+  id            text primary key,
+  name          text not null,
+  password_hash text not null,
+  permissions   text[] not null default '{}',
+  created_at    timestamptz not null default now()
+);
+create unique index if not exists admins_name_idx on admins (lower(name));
+alter table admins enable row level security;
+alter table sessions add column if not exists admin_id text references admins(id) on delete cascade;
+
+-- Histórico de ações do painel admin (quem fez o quê e quando). Sem FK de propósito: o registro
+-- continua existindo depois que um admin é excluído. Guarda só o necessário, nunca senhas.
+create table if not exists admin_log (
+  id         bigserial primary key,
+  at         timestamptz not null default now(),
+  admin_id   text,
+  admin_name text not null,
+  action     text not null,
+  detail     text
+);
+create index if not exists admin_log_at_idx on admin_log (id desc);
+alter table admin_log enable row level security;
+
 -- Enquetes com odd: o participante aposta pontos do ranking numa opção. Quem
 -- acerta recebe a aposta multiplicada pela odd (total de apostadores / apostadores
 -- na opção certa), então opção pouco escolhida paga mais. Quem erra perde a aposta.
 alter table polls add column if not exists odds boolean not null default false;
 alter table votes add column if not exists stake integer;
 -- Tetos opcionais (definidos pelo admin) da enquete com odd: aposta máxima e ganho líquido máximo por pessoa. Nulo = sem limite.
+-- Odd de prêmio fixo (alternativa à aposta): os pontos da enquete (points) são divididos entre quem acertar,
+-- então quanto menos gente acerta, maior a parte de cada um. Ninguém aposta pontos do próprio ranking.
+alter table polls add column if not exists pool_odds boolean not null default false;
 alter table polls add column if not exists max_stake integer;
 alter table polls add column if not exists max_win integer;
 -- Ganho líquido guardado de rodadas antigas de enquetes com odd (pode ser negativo).
