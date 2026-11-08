@@ -14,6 +14,8 @@ Ao criar uma enquete no admin, marque **Enquete com odd** (cada enquete decide; 
 - O participante escolhe uma opção e aposta pontos do **ranking geral** (saldo = total de pontos menos o que já está apostado em enquetes sem resultado). Pode trocar a aposta até a votação encerrar (a menos que a Trava de voto esteja ligada).
 - Odd = total de apostadores ÷ apostadores na opção. Quem acerta recebe `aposta × odd` (ganho líquido = isso − aposta); quem erra perde a aposta. Pouca gente na opção certa = prêmio alto; muita gente = prêmio baixo; todo mundo na mesma opção = devolve a aposta.
 - **Dois tipos de odd** (escolha ao marcar “Enquete com odd”): **Aposta** (acima) ou **Prêmio fixo**. No prêmio fixo ninguém usa pontos do próprio ranking: o admin define os pontos da enquete (campo “Prêmio total”) e eles são divididos entre quem acertar (prêmio ÷ nº de acertadores, arredondado para baixo). Pouca gente na opção certa = parte grande; muita gente = parte pequena; quem erra não perde nada. O “Ganho máximo por pessoa” também vale aqui. Se a casa ganhar, o prêmio é dividido entre as contas da casa escolhidas.
+- **Pontos por opção** (outro modo, sem odd): marque “Pontos por opção” e escreva as opções como `Texto | pontos` (ex.: `Time A | 5`). Quem votar na opção certa leva os pontos dela; quem errar leva 0. Se a casa ganhar, as contas da casa levam os “Pontos por acerto”. Não combina com odd e não dá para ligar/desligar depois de publicar.
+- Em “Pontos por opção” há a caixa **Mostrar os pontos de cada opção na enquete**: desligada, os participantes não veem a pontuação das opções durante a votação (o servidor nem envia os valores); eles aparecem quando o resultado é definido. Dá para mudar a qualquer momento.
 - O admin pode definir, por enquete, uma **aposta máxima** e um **ganho máximo** por pessoa (campos opcionais; em branco = sem limite). O ganho máximo limita o lucro líquido de quem acertar.
 - Se a casa ganhar ("ninguém acertou"), os apostadores perdem a aposta e as contas da casa escolhidas recebem os "Pontos por acerto" da enquete.
 - O ganho/perda entra no ranking geral e no semanal; reabrir ou apagar a enquete mantendo/zerando pontos funciona igual às enquetes normais.
@@ -32,6 +34,10 @@ Admins sem permissão **veem tudo em modo somente leitura** (as abas ficam visí
 ### Histórico de ações
 
 Toda ação que muda algo no painel (criar/editar/encerrar/excluir enquete, resultado, pontos, banimentos, configurações, admins…) é registrada com quem fez, o quê e quando. O dono vê na aba **📜 Histórico** (filtro por admin, “carregar mais”). Registros com mais de 6 meses são apagados automaticamente. Senhas e o conteúdo das apostas/contas de teste não entram.
+
+## Cancelar enquete
+
+O botão **Cancelar e devolver pontos** (permissão “encerrar, reabrir e definir resposta”) deixa a enquete na lista como *Cancelada*: ninguém ganha nem perde pontos por ela, as apostas são devolvidas (o saldo volta na hora) e, se ela já tinha resultado, os pontos que deu ou tirou também saem do ranking. Os votos continuam registrados e **Reabrir votação** desfaz o cancelamento. Para apagar de vez, use Excluir.
 
 ## Trava de voto
 

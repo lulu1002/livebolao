@@ -192,8 +192,14 @@
     }
   }
 
+  function cancelPoll(p) {
+    const extra = p.status === 'resolved' ? ' Os pontos que ela já deu ou tirou também são desfeitos.' : '';
+    if (!confirm(`Cancelar "${p.title}"? Ninguém ganha nem perde pontos por ela e as apostas são devolvidas.${extra} Dá para reabrir depois.`)) return;
+    act(() => api(`/api/admin/polls/${p.id}/cancel`, { method: 'POST' }), 'Enquete cancelada. Pontos devolvidos');
+  }
+
   function statusText(p) {
-    return { open: 'Aberta', closed: 'Encerrada', resolved: 'Resultado' }[p.status];
+    return { open: 'Aberta', closed: 'Encerrada', resolved: 'Resultado', cancelled: 'Cancelada' }[p.status];
   }
 
   function renderPoll(p) {
@@ -206,7 +212,7 @@
       h('span', { class: 'count' }, `${o.voters.length} ${o.voters.length === 1 ? 'voto' : 'votos'}`)));
 
     const meta = [
-      p.poolOdds ? `🎲 prêmio de ${p.points} pts dividido entre quem acertar${p.maxWin ? ` · ganho máx. +${p.maxWin}` : ''}` : p.odds ? `🎲 odd · ${p.pool} pts apostados${p.maxStake ? ` · aposta máx. ${p.maxStake}` : ''}${p.maxWin ? ` · ganho máx. +${p.maxWin}` : ''}` : `${p.points} ${p.points === 1 ? 'ponto' : 'pontos'} por acerto`,
+      p.optionPoints ? `🎯 pontos por opção: ${p.options.map((o) => `${o.text} (${o.points})`).join(' · ')}` : p.poolOdds ? `🎲 prêmio de ${p.points} pts dividido entre quem acertar${p.maxWin ? ` · ganho máx. +${p.maxWin}` : ''}` : p.odds ? `🎲 odd · ${p.pool} pts apostados${p.maxStake ? ` · aposta máx. ${p.maxStake}` : ''}${p.maxWin ? ` · ganho máx. +${p.maxWin}` : ''}` : `${p.points} ${p.points === 1 ? 'ponto' : 'pontos'} por acerto`,
       p.closesAt ? `encerra em ${fmtDate(p.closesAt)}` : 'sem prazo',
       `${p.totalVotes} ${p.totalVotes === 1 ? 'voto' : 'votos'}`,
     ].join(', ');
@@ -215,7 +221,7 @@
       h('div', { class: 'apoll-head' }, h('h3', {}, p.title),
         h('span', { class: 'pills' },
           p.house ? h('span', { class: 'pill' }, '🏠 Casa') : null,
-          p.odds || p.poolOdds ? h('span', { class: 'pill' }, p.poolOdds ? '🎲 Prêmio dividido' : '🎲 Odd') : null,
+          p.odds || p.poolOdds || p.optionPoints ? h('span', { class: 'pill' }, p.optionPoints ? '🎯 Pontos por opção' : p.poolOdds ? '🎲 Prêmio dividido' : '🎲 Odd') : null,
           p.visible ? null : h('span', { class: 'pill' }, 'Fora da página'),
           h('span', { class: `pill ${p.status}` }, statusText(p)))),
       h('p', { class: 'meta' }, meta),
@@ -223,7 +229,9 @@
       p.houseWon
         ? h('p', { class: 'result house' }, `🏠 A casa ganhou: nenhuma opção bateu. +${p.points} pts pra cada conta da casa.`)
         : correct
-          ? h('p', { class: 'result' }, p.poolOdds
+          ? h('p', { class: 'result' }, p.optionPoints
+            ? `Resposta certa: ${correct.text}. ${p.hits} de ${p.totalVotes} acertaram (+${correct.points} pts cada).`
+            : p.poolOdds
             ? `Resposta certa: ${correct.text}. ${p.hits} de ${p.totalVotes} acertaram (+${p.hits ? Math.min(Math.floor(p.points / p.hits), p.maxWin || Infinity) : 0} pts cada).`
             : p.odds
             ? `Resposta certa: ${correct.text}. ${p.hits} de ${p.totalVotes} acertaram (odd ${(p.hits ? p.totalVotes / p.hits : 0).toFixed(2)}x).`
@@ -240,6 +248,7 @@
         !can('polls_resolve') ? null : p.status === 'open'
           ? h('button', { class: 'btn ghost', type: 'button', onclick: () => act(() => api(`/api/admin/polls/${p.id}/close`, { method: 'POST' }), 'Votação encerrada') }, 'Encerrar votação')
           : h('button', { class: 'btn ghost', type: 'button', onclick: () => reopen(p) }, 'Reabrir votação'),
+        can('polls_resolve') && p.status !== 'cancelled' && h('button', { class: 'btn ghost', type: 'button', onclick: () => cancelPoll(p) }, 'Cancelar e devolver pontos'),
         can('polls_visibility') && h('button', { class: 'btn ghost', type: 'button', onclick: () => act(() => api(`/api/admin/polls/${p.id}/visibility`, { method: 'POST', body: { visible: !p.visible } }), p.visible ? 'Enquete ocultada da página' : 'Enquete de volta na página') },
           p.visible ? 'Ocultar da página' : 'Mostrar na página'),
         can('polls_edit') && h('button', { class: 'btn ghost', type: 'button', onclick: () => moveTopic(p) }, 'Mover de tópico'),
@@ -466,10 +475,25 @@
       : 'Teto do lucro líquido de quem acertar. Em branco, o prêmio é só aposta × odd.';
   }
   // Mostra só o que o nível do admin permite mexer: ao editar, os campos básicos pedem "editar enquetes" e a odd pede "definir odd"
+  // "Pontos por opção" e "odd" são excludentes; ao editar, o tipo já não pode mudar
+  function syncOptionMode() {
+    const op = $('#f-opt-points').checked;
+    $('#f-show-opt-points-field').hidden = !op;
+    if (op) $('#f-odds').checked = false;
+    $('#f-odds').disabled = op;
+    $('#f-opt-points').disabled = Boolean(state.editing) || $('#f-odds').checked;
+    $('#f-options').placeholder = op ? 'Uma por linha: Texto | pontos (ex.: Time A | 5)' : 'Uma opção por linha';
+    if (!state.editing) $('#f-options-hint').textContent = op ? 'De 1 a 10 opções, uma por linha, no formato Texto | pontos.' : 'De 1 a 10 opções, uma por linha.';
+  }
+  $('#f-opt-points').addEventListener('change', () => { syncOptionMode(); syncOddsLimits(); });
+  $('#f-odds').addEventListener('change', () => { if ($('#f-odds').checked) $('#f-opt-points').checked = false; syncOptionMode(); });
+
   function applyFormPerms() {
     const lockBase = Boolean(state.editing) && !can('polls_edit');
-    ['#f-title', '#f-desc', '#f-points', '#f-closes', '#f-house'].forEach((s) => { $(s).disabled = lockBase; });
+    ['#f-title', '#f-desc', '#f-points', '#f-closes', '#f-house', '#f-show-opt-points'].forEach((s) => { $(s).disabled = lockBase; });
     $('#f-odds').closest('.field').hidden = !can('polls_odds');
+    $('#f-opt-points').closest('.field').hidden = !can('polls_odds');
+    syncOptionMode();
     $('#form-submit').disabled = !state.editing && !can('polls_create'); // sem permissão de criar, só edita
     syncOddsLimits();
   }
@@ -482,6 +506,8 @@
     $('#f-points').value = 10;
     $('#f-house').checked = false;
     $('#f-odds').checked = false;
+    $('#f-opt-points').checked = false;
+    $('#f-show-opt-points').checked = true;
     $('#f-odds-kind').value = 'stake';
     $('#f-max-stake').value = '';
     $('#f-max-win').value = '';
@@ -501,12 +527,14 @@
     state.editing = p.id;
     $('#f-title').value = p.title;
     $('#f-desc').value = p.description || '';
-    $('#f-options').value = p.options.map((o) => o.text).join('\n');
+    $('#f-options').value = p.options.map((o) => (p.optionPoints ? `${o.text} | ${o.points}` : o.text)).join('\n');
     $('#f-options').disabled = true;
     $('#f-options-hint').textContent = 'As opções não podem ser alteradas depois de publicar.';
     $('#f-points').value = p.points;
     $('#f-house').checked = Boolean(p.house);
     $('#f-odds').checked = Boolean(p.odds || p.poolOdds);
+    $('#f-opt-points').checked = Boolean(p.optionPoints);
+    $('#f-show-opt-points').checked = p.showOptionPoints !== false;
     $('#f-odds-kind').value = p.poolOdds ? 'pool' : 'stake';
     $('#f-max-stake').value = p.maxStake || '';
     $('#f-max-win').value = p.maxWin || '';
@@ -557,6 +585,8 @@
       points: $('#f-points').value,
       closesAt: closes ? new Date(closes).toISOString() : null,
       house: $('#f-house').checked,
+      optionPoints: $('#f-opt-points').checked,
+      showOptionPoints: $('#f-show-opt-points').checked,
       odds: $('#f-odds').checked && $('#f-odds-kind').value === 'stake',
       poolOdds: $('#f-odds').checked && $('#f-odds-kind').value === 'pool',
       maxStake: $('#f-max-stake').value,

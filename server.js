@@ -133,7 +133,7 @@ async function createSession(kind, userId, ttlMs, adminId = null) {
 const PERMISSIONS = [
   { key: 'polls_create', group: 'Enquetes', label: 'Criar enquetes' },
   { key: 'polls_edit', group: 'Enquetes', label: 'Editar título, descrição, pontos, prazo, casa e tópico' },
-  { key: 'polls_odds', group: 'Enquetes', label: 'Definir odd e tetos de aposta/ganho' },
+  { key: 'polls_odds', group: 'Enquetes', label: 'Definir odd, tetos de aposta/ganho e pontos por opção' },
   { key: 'polls_resolve', group: 'Enquetes', label: 'Encerrar, reabrir e definir a resposta certa' },
   { key: 'polls_visibility', group: 'Enquetes', label: 'Ocultar ou mostrar enquetes na página' },
   { key: 'polls_delete', group: 'Enquetes', label: 'Excluir enquetes' },
@@ -252,6 +252,9 @@ function rowToPoll(r) {
     house: Boolean(r.house),
     odds: Boolean(r.odds),
     poolOdds: Boolean(r.pool_odds),
+    optionPoints: Boolean(r.option_points),
+    showOptionPoints: r.show_option_points !== false,
+    cancelled: Boolean(r.cancelled),
     maxStake: r.max_stake,
     maxWin: r.max_win,
     createdAt: iso(r.created_at),
@@ -266,10 +269,10 @@ async function fetchPolls(where = '', params = []) {
   if (!polls.length) return polls;
   const byId = new Map(polls.map((p) => [p.id, p]));
   const opts = await q(
-    'select id, poll_id, label, is_house from poll_options where poll_id = any($1::text[]) order by poll_id, position',
+    'select id, poll_id, label, is_house, points from poll_options where poll_id = any($1::text[]) order by poll_id, position',
     [polls.map((p) => p.id)]
   );
-  for (const o of opts.rows) byId.get(o.poll_id).options.push({ id: o.id, text: o.label, isHouse: o.is_house });
+  for (const o of opts.rows) byId.get(o.poll_id).options.push({ id: o.id, text: o.label, isHouse: o.is_house, points: o.points });
   return polls;
 }
 
@@ -313,6 +316,9 @@ const netWin = (stake, total, onOption, maxWin) => {
 // Ganho líquido de um voto numa enquete resolvida (aliases: v = votes, p = polls).
 // Sem aposta: regra antiga (p.points se acertou). Com aposta: acertou = stake*odd - stake; errou = -stake.
 const GAIN_SQL = `case
+    when v.stake is null and p.option_points then
+      (case when v.option_id = p.correct_option_id
+        then coalesce((select po.points from poll_options po where po.id = v.option_id), p.points) else 0 end)
     when v.stake is null and p.pool_odds then
       (case when v.option_id = p.correct_option_id then
         least(floor(p.points::numeric
@@ -342,6 +348,7 @@ async function getMode() {
 }
 
 function pollStatus(p) {
+  if (p.cancelled) return 'cancelled';
   if (p.correctOptionId) return 'resolved';
   if (p.closed) return 'closed';
   if (p.closesAt && Date.parse(p.closesAt) <= Date.now()) return 'closed';
@@ -381,6 +388,8 @@ function publicPoll(p, votes, userId) {
     odds: Boolean(p.odds),
     maxStake: p.odds ? p.maxStake : null,
     poolOdds: Boolean(p.poolOdds),
+    optionPoints: Boolean(p.optionPoints),
+    optionPointsHidden: Boolean(p.optionPoints && !p.showOptionPoints && status !== 'resolved'),
     maxWin: p.odds || p.poolOdds ? p.maxWin : null,
     options: visibleOptions(p).map((o) => {
       const base = {
@@ -388,6 +397,8 @@ function publicPoll(p, votes, userId) {
         text: o.text,
         votes: showResults ? (p.odds ? countOn(o.id) : votes.filter((v) => v.option_id === o.id).length) : null,
       };
+      // Pontos escondidos pelo admin só aparecem depois do resultado
+      if (p.optionPoints && (p.showOptionPoints || status === 'resolved')) base.points = o.points ?? p.points;
       if (p.poolOdds) {
         // Parte do prêmio que a pessoa levaria se votasse aqui e esta opção fosse a certa
         const on = votes.filter((v) => v.option_id === o.id).length - (mine && mine.option_id === o.id ? 1 : 0);
@@ -410,6 +421,7 @@ function publicPoll(p, votes, userId) {
     myPoints:
       status === 'resolved' && mine && p.counted
         ? (p.odds && myBet ? myNet
+          : p.optionPoints ? (mine.option_id === p.correctOptionId ? (p.options.find((o) => o.id === p.correctOptionId)?.points ?? p.points) : 0)
           : p.poolOdds ? (mine.option_id === p.correctOptionId ? poolShare(votes.filter((v) => v.option_id === p.correctOptionId).length) : 0)
           : (mine.option_id === p.correctOptionId ? p.points : 0))
         : null,
@@ -433,6 +445,8 @@ function adminPoll(p, votes) {
     house: p.house,
     odds: p.odds,
     poolOdds: p.poolOdds,
+    optionPoints: p.optionPoints,
+    showOptionPoints: p.showOptionPoints,
     maxStake: p.maxStake,
     maxWin: p.maxWin,
     pool: p.odds ? votes.reduce((n, v) => n + (v.stake || 0), 0) : null,
@@ -443,6 +457,7 @@ function adminPoll(p, votes) {
     options: visibleOptions(p).map((o) => ({
       id: o.id,
       text: o.text,
+      points: p.optionPoints ? (o.points ?? p.points) : null,
       voters: votes.filter((v) => v.option_id === o.id).map((v) => (v.stake != null ? `${v.display_name} (${v.stake} pts)` : v.display_name)),
     })),
   };
@@ -811,16 +826,28 @@ function parsePollInput(body, requireOptions) {
   const odds = body?.odds === true;
   const poolOdds = body?.poolOdds === true;
   if (odds && poolOdds) return { error: 'Escolha só um tipo de odd: aposta de pontos do ranking ou prêmio fixo dividido.' };
+  const optionPoints = body?.optionPoints === true;
+  if (optionPoints && (odds || poolOdds)) return { error: 'Pontos por opção não combina com odd: escolha só um dos dois.' };
   const out = {
-    title, description, points, closesAt, house: body?.house === true, odds, poolOdds,
+    title, description, points, closesAt, house: body?.house === true, odds, poolOdds, optionPoints,
+    showOptionPoints: body?.showOptionPoints !== false,
     maxStake: odds ? maxStake : null, maxWin: odds || poolOdds ? maxWin : null,
   };
   if (requireOptions) {
     const raw = Array.isArray(body?.options) ? body.options : [];
-    const options = [...new Set(raw.map((o) => String(o).trim()).filter(Boolean))];
-    if (options.length < 1 || options.length > 10) return { error: 'Informe de 1 a 10 opções diferentes.' };
-    if (options.some((o) => o.length > 100)) return { error: 'Cada opção pode ter no máximo 100 caracteres.' };
-    out.options = options.map((text) => ({ id: uid(), text }));
+    let parsed = raw.map((o) => String(o).trim()).filter(Boolean).map((line) => {
+      if (!optionPoints) return { text: line };
+      // Pontos por opção: cada linha é "Texto | pontos"
+      const cut = line.lastIndexOf('|');
+      const pts = cut < 0 ? NaN : Number(line.slice(cut + 1).trim());
+      return { text: cut < 0 ? line : line.slice(0, cut).trim(), points: pts, line };
+    });
+    const bad = parsed.find((o) => optionPoints && (!Number.isInteger(o.points) || o.points < 1 || o.points > 1000 || !o.text));
+    if (bad) return { error: `A opção "${bad.line || bad.text}" precisa de pontos: escreva "Texto | pontos" (de 1 a 1000).` };
+    parsed = parsed.filter((o, i) => parsed.findIndex((x) => x.text === o.text) === i);
+    if (parsed.length < 1 || parsed.length > 10) return { error: 'Informe de 1 a 10 opções diferentes.' };
+    if (parsed.some((o) => o.text.length > 100)) return { error: 'Cada opção pode ter no máximo 100 caracteres.' };
+    out.options = parsed.map((o) => ({ id: uid(), text: o.text, points: optionPoints ? o.points : null }));
   }
   return out;
 }
@@ -888,6 +915,7 @@ const ADMIN_ACTIONS = [
   ['PUT', /^\/polls\/[^/]+$/, 'Editou a enquete', (b, c) => c.title],
   ['POST', /^\/polls\/[^/]+\/topic$/, 'Moveu a enquete de tópico', (b, c) => c.title],
   ['POST', /^\/polls\/[^/]+\/close$/, 'Encerrou a votação', (b, c) => c.title],
+  ['POST', /^\/polls\/[^/]+\/cancel$/, 'Cancelou a enquete (pontos devolvidos)', (b, c) => c.title],
   ['POST', /^\/polls\/[^/]+\/reopen$/, 'Reabriu a votação', (b, c) => c.title],
   ['POST', /^\/polls\/[^/]+\/resolve$/, 'Definiu o resultado da enquete', (b, c) => c.title],
   ['POST', /^\/polls\/[^/]+\/visibility$/, 'Mudou a visibilidade da enquete', (b, c) => `${c.title || ''} → ${b?.visible ? 'visível' : 'oculta'}`],
@@ -1006,7 +1034,7 @@ async function notifyPrizeWon(userName, prizeName) {
    na enquete recebe "acertou +N" ou "dessa vez não deu". */
 async function notifyPollResult(pollId) {
   if (!PUSH_ENABLED || !(await getFlag('notify_result'))) return;
-  const { rows: pr } = await q('select title, points, correct_option_id, odds, pool_odds, max_win from polls where id = $1', [pollId]);
+  const { rows: pr } = await q('select title, points, correct_option_id, odds, pool_odds, option_points, max_win from polls where id = $1', [pollId]);
   const poll = pr[0];
   if (!poll || !poll.correct_option_id) return;
   const { rows } = await q(
@@ -1037,7 +1065,9 @@ async function notifyPollResult(pollId) {
     return;
   }
   let gain = poll.points;
-  if (poll.pool_odds) {
+  if (poll.option_points) {
+    gain = (await q('select points from poll_options where id = $1', [poll.correct_option_id])).rows[0]?.points ?? poll.points;
+  } else if (poll.pool_odds) {
     // Prêmio fixo dividido: a parte de cada acertador
     const w = (await q('select count(*)::int as n from votes where poll_id = $1 and option_id = $2', [pollId, poll.correct_option_id])).rows[0].n;
     gain = Math.floor(poll.points / Math.max(1, w));
@@ -1252,7 +1282,7 @@ app.get('/api/polls', wrap(async (req, res) => {
   const u = await currentUser(req);
   const list = await fetchPolls('where visible');
   const votes = await fetchVotes(list.map((p) => p.id));
-  const rank = { open: 0, closed: 1, resolved: 2 };
+  const rank = { open: 0, closed: 1, resolved: 2, cancelled: 3 };
   const deadline = (p) => (p.closesAt ? Date.parse(p.closesAt) : Number.MAX_SAFE_INTEGER);
   const polls = list.map((p) => publicPoll(p, votes.get(p.id) || [], u && u.id));
   polls.sort((a, b) => {
@@ -1270,7 +1300,7 @@ async function lockedStakes(client, userId, exceptPollId = '') {
   const { rows } = await client.query(
     `select coalesce(sum(v.stake), 0)::int as n
      from votes v join polls p on p.id = v.poll_id
-     where v.user_id = $1 and v.stake is not null and p.correct_option_id is null and p.id <> $2`,
+     where v.user_id = $1 and v.stake is not null and p.correct_option_id is null and not p.cancelled and p.id <> $2`,
     [userId, exceptPollId]
   );
   return rows[0].n;
@@ -1520,7 +1550,7 @@ app.get('/api/admin/polls', requireAdmin, wrap(async (req, res) => {
 app.post('/api/admin/polls', requirePerm('polls_create'), wrap(async (req, res) => {
   const input = parsePollInput(req.body, true);
   if (input.error) return res.status(400).json({ error: input.error });
-  if ((input.odds || input.poolOdds) && !can(req, 'polls_odds')) return res.status(403).json({ error: 'Seu nível de admin não permite criar enquete com odd.' });
+  if ((input.odds || input.poolOdds || input.optionPoints) && !can(req, 'polls_odds')) return res.status(403).json({ error: 'Seu nível de admin não permite criar enquete com odd.' });
   // Proteção: não deixa criar outra enquete com o mesmo nome (ignora maiúsculas e espaços nas pontas)
   const dup = await q('select 1 from polls where lower(btrim(title)) = lower($1) limit 1', [input.title]);
   if (dup.rowCount) return res.status(409).json({ error: 'Já existe uma enquete com esse nome. Use outro nome.' });
@@ -1538,7 +1568,7 @@ app.post('/api/admin/polls', requirePerm('polls_create'), wrap(async (req, res) 
         [topicId]
       );
     }
-    await c.query('insert into polls (id, title, description, points, closes_at, topic_id, house, odds, max_stake, max_win, pool_odds) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)', [
+    await c.query('insert into polls (id, title, description, points, closes_at, topic_id, house, odds, max_stake, max_win, pool_odds, option_points, show_option_points) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)', [
       id,
       input.title,
       input.description,
@@ -1550,9 +1580,11 @@ app.post('/api/admin/polls', requirePerm('polls_create'), wrap(async (req, res) 
       input.maxStake,
       input.maxWin,
       input.poolOdds,
+      input.optionPoints,
+      input.showOptionPoints,
     ]);
     for (const [i, o] of input.options.entries()) {
-      await c.query('insert into poll_options (id, poll_id, label, position) values ($1, $2, $3, $4)', [o.id, id, o.text, i]);
+      await c.query('insert into poll_options (id, poll_id, label, position, points) values ($1, $2, $3, $4, $5)', [o.id, id, o.text, i, o.points]);
     }
   });
   // Só notifica se a chave geral estiver ligada E esta enquete não tiver sido publicada "sem avisar"
@@ -1569,24 +1601,27 @@ app.put('/api/admin/polls/:id', requirePerm('polls_edit', 'polls_odds'), wrap(as
   const input = parsePollInput(req.body, false);
   if (input.error) return res.status(400).json({ error: input.error });
   // Trocar entre enquete normal e com odd só é seguro enquanto ninguém votou
-  const cur = await q('select odds, pool_odds, (select count(*)::int from votes where poll_id = polls.id) as n from polls where id = $1', [req.params.id]);
+  const cur = await q('select odds, pool_odds, option_points, (select count(*)::int from votes where poll_id = polls.id) as n from polls where id = $1', [req.params.id]);
   if (!cur.rowCount) return notFound(res);
   {
     // Nível de acesso: só deixa mudar o que o admin tem permissão de mudar
     const [old] = await fetchPolls('where id = $1', [req.params.id]);
     const minute = (d) => (d ? Math.floor(new Date(d).getTime() / 60000) : null);
     const baseChanged = old.title !== input.title || (old.description || '') !== (input.description || '')
-      || old.points !== input.points || Boolean(old.house) !== input.house || minute(old.closesAt) !== minute(input.closesAt);
+      || old.points !== input.points || old.showOptionPoints !== input.showOptionPoints || Boolean(old.house) !== input.house || minute(old.closesAt) !== minute(input.closesAt);
     const oddsChanged = Boolean(old.odds) !== input.odds || Boolean(old.poolOdds) !== input.poolOdds || (old.maxStake || null) !== input.maxStake || (old.maxWin || null) !== input.maxWin;
     if (baseChanged && !can(req, 'polls_edit')) return res.status(403).json({ error: 'Seu nível de admin não permite editar título, descrição, pontos, prazo ou casa.' });
     if (oddsChanged && !can(req, 'polls_odds')) return res.status(403).json({ error: 'Seu nível de admin não permite mudar odd nem tetos de aposta.' });
+  }
+  if (cur.rows[0].option_points !== input.optionPoints) {
+    return res.status(409).json({ error: 'Não dá para ligar ou desligar “pontos por opção” depois de publicar (as opções já foram criadas).' });
   }
   if (cur.rows[0].odds !== input.odds || cur.rows[0].pool_odds !== input.poolOdds) {
     if (cur.rows[0].n > 0) return res.status(409).json({ error: 'Já existem votos nesta enquete: não dá mais pra ligar ou desligar a odd.' });
   }
   const r = await q(`update polls set title = $2, description = $3, points = $4,
       closing_notified = (closing_notified and closes_at is not distinct from $5::timestamptz), closes_at = $5,
-      house = $6, odds = $7, max_stake = $8, max_win = $9, pool_odds = $10
+      house = $6, odds = $7, max_stake = $8, max_win = $9, pool_odds = $10, show_option_points = $11
     where id = $1`, [
     req.params.id,
     input.title,
@@ -1598,6 +1633,7 @@ app.put('/api/admin/polls/:id', requirePerm('polls_edit', 'polls_odds'), wrap(as
     input.maxStake,
     input.maxWin,
     input.poolOdds,
+    input.showOptionPoints,
   ]);
   if (!r.rowCount) return notFound(res);
   res.json({ ok: true });
@@ -1666,6 +1702,22 @@ app.post('/api/admin/polls/:id/close', requirePerm('polls_resolve'), wrap(async 
 /* Reabrir votação. Se a enquete já tem resposta e soma pontos, o admin escolhe:
    - "keep": os pontos atuais ficam guardados no ranking e os votos são limpos (nova rodada);
    - "zero": os pontos desta enquete saem do ranking (inclusive rodadas guardadas antes). */
+/* Cancelar: a enquete fica na lista como "Cancelada", ninguém ganha nem perde pontos por ela (os pontos que ela já
+   tivesse dado ou tirado também saem do ranking) e as apostas são devolvidas. Os votos continuam registrados e
+   "Reabrir votação" desfaz o cancelamento. */
+app.post('/api/admin/polls/:id/cancel', requirePerm('polls_resolve'), wrap(async (req, res) => {
+  const result = await tx(async (c) => {
+    const { rows } = await c.query('select cancelled from polls where id = $1 for update', [req.params.id]);
+    if (!rows.length) return 'notfound';
+    if (rows[0].cancelled) return 'already';
+    await c.query('update polls set cancelled = true, closed = true, correct_option_id = null, resolved_at = null where id = $1', [req.params.id]);
+    return 'ok';
+  });
+  if (result === 'notfound') return notFound(res);
+  if (result === 'already') return res.status(409).json({ error: 'Esta enquete já está cancelada.' });
+  res.json({ ok: true });
+}));
+
 app.post('/api/admin/polls/:id/reopen', requirePerm('polls_resolve'), wrap(async (req, res) => {
   const choice = req.body?.points;
   const result = await tx(async (c) => {
@@ -1688,7 +1740,7 @@ app.post('/api/admin/polls/:id/reopen', requirePerm('polls_resolve'), wrap(async
     }
     await c.query(
       `update polls
-       set closed = false, correct_option_id = null, resolved_at = null,
+       set closed = false, cancelled = false, correct_option_id = null, resolved_at = null,
            closes_at = case when closes_at is not null and closes_at <= now() then null else closes_at end
        where id = $1`,
       [req.params.id]
@@ -1724,8 +1776,9 @@ const upsertHouseVote = (pollId, userId, optionId) => q(
 
 app.post('/api/admin/polls/:id/resolve', requirePerm('polls_resolve'), wrap(async (req, res) => {
   let optionId;
-  const pollRow = await q('select house from polls where id = $1', [req.params.id]);
+  const pollRow = await q('select house, cancelled from polls where id = $1', [req.params.id]);
   if (!pollRow.rowCount) return notFound(res);
+  if (pollRow.rows[0].cancelled) return res.status(409).json({ error: 'Esta enquete está cancelada. Reabra a votação antes de definir o resultado.' });
   const houseFlag = pollRow.rows[0].house;
   const pickHouse = async (raw) => {
     const ids = Array.isArray(raw) ? raw.map(String) : [];

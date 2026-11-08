@@ -304,6 +304,13 @@ alter table admin_log enable row level security;
 alter table polls add column if not exists odds boolean not null default false;
 alter table votes add column if not exists stake integer;
 -- Tetos opcionais (definidos pelo admin) da enquete com odd: aposta máxima e ganho líquido máximo por pessoa. Nulo = sem limite.
+-- Enquete cancelada: ninguém ganha nem perde pontos por ela e as apostas ficam livres de novo (dá para reabrir).
+alter table polls add column if not exists cancelled boolean not null default false;
+-- Pontos por opção: o admin define a pontuação de cada opção (poll_options.points); quem acerta leva os pontos da opção certa.
+alter table polls add column if not exists option_points boolean not null default false;
+alter table poll_options add column if not exists points integer;
+-- Mostrar ou esconder os pontos de cada opção para os participantes (escondidos até sair o resultado).
+alter table polls add column if not exists show_option_points boolean not null default true;
 -- Odd de prêmio fixo (alternativa à aposta): os pontos da enquete (points) são divididos entre quem acertar,
 -- então quanto menos gente acerta, maior a parte de cada um. Ninguém aposta pontos do próprio ranking.
 alter table polls add column if not exists pool_odds boolean not null default false;

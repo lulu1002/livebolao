@@ -243,10 +243,14 @@
   function whenLabel(p) {
     if (p.status === 'open') return p.closesAt ? `Fecha em ${fmtDate(p.closesAt)}` : 'Fecha quando o admin encerrar';
     if (p.status === 'closed') return 'Aguardando resultado';
+    if (p.status === 'cancelled') return 'Cancelada';
     return 'Resultado definido';
   }
 
   function noteFor(p) {
+    if (p.status === 'cancelled') {
+      return h('p', { class: 'note' }, p.odds ? 'Enquete cancelada: ninguém ganha nem perde pontos e as apostas foram devolvidas.' : 'Enquete cancelada: ela não vale pontos.');
+    }
     if (p.status === 'open') {
       if (!state.user) {
         return h('p', { class: 'note' }, 'Entre com a Twitch para registrar seu palpite. ',
@@ -254,7 +258,11 @@
       }
       if (p.odds) return null; // o quadro de aposta já explica tudo
       if (p.myVote) return h('p', { class: 'note' }, state.lockVotes ? 'Palpite registrado. Não é possível trocar o voto.' : 'Palpite registrado. Você pode trocar até a votação encerrar.');
-      return h('p', { class: 'note' }, p.poolOdds
+      return h('p', { class: 'note' }, p.optionPoints
+        ? (p.optionPointsHidden
+          ? 'Cada opção vale uma pontuação diferente, mas os valores só aparecem depois do resultado. Acertando, você leva os pontos da opção certa.'
+          : 'Cada opção vale uma pontuação diferente (veja ao lado de cada uma). Acertando, você leva os pontos da opção certa.')
+        : p.poolOdds
         ? `Toque em uma opção para dar seu palpite. Os ${p.points} pontos da enquete são divididos entre quem acertar: quanto menos gente na opção certa, maior a sua parte.`
         : 'Toque em uma opção para dar seu palpite.');
     }
@@ -358,6 +366,9 @@
     if (p.odds && isOpen) {
       btn.append(h('span', { class: 'opt-meta' }, `${o.votes} ${o.votes === 1 ? 'aposta' : 'apostas'} · `, h('b', { class: 'odd' }, `${oddLabel(o.odd)}x`)));
     }
+    if (p.optionPoints && isOpen && o.points != null) {
+      btn.append(h('span', { class: 'opt-meta' }, h('b', { class: 'odd' }, `+${o.points} pts`)));
+    }
     if (p.poolOdds && isOpen) {
       btn.append(h('span', { class: 'opt-meta' }, `${o.votes} ${o.votes === 1 ? 'voto' : 'votos'} · `, h('b', { class: 'odd' }, `~${o.share} pts`)));
     }
@@ -367,18 +378,20 @@
       btn.style.setProperty('--pct', `${pct}%`);
       btn.prepend(h('span', { class: 'bar' }));
       if (correct) btn.append(h('span', { class: 'tag' }, 'Certa'));
-      btn.append(h('span', { class: 'opt-meta' }, `${pct}% (${o.votes})`));
+      btn.append(h('span', { class: 'opt-meta' }, p.optionPoints && o.points != null ? [h('b', { class: 'odd' }, `+${o.points} pts`), ' · '] : null, `${pct}% (${o.votes})`));
     }
     return btn;
   }
 
   function renderPoll(p) {
-    const statusText = { open: 'Aberta', closed: 'Encerrada', resolved: 'Resultado' }[p.status];
+    const statusText = { open: 'Aberta', closed: 'Encerrada', resolved: 'Resultado', cancelled: 'Cancelada' }[p.status];
     return h('article', { class: 'ticket' },
       h('div', { class: 'stub' },
         h('div', { class: 'pts' },
           p.odds
             ? [h('span', { class: 'pts-n' }, '🎲'), h('span', { class: 'pts-l' }, 'odd')]
+            : p.optionPoints
+            ? [h('span', { class: 'pts-n' }, '🎯'), h('span', { class: 'pts-l' }, 'por opção')]
             : p.poolOdds
             ? [h('span', { class: 'pts-n' }, p.points), h('span', { class: 'pts-l' }, 'pontos divididos')]
             : [h('span', { class: 'pts-n' }, p.points), h('span', { class: 'pts-l' }, p.points === 1 ? 'ponto' : 'pontos')]),

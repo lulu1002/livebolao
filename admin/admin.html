@@ -32,8 +32,8 @@
       <form id="login-form">
         <div class="field">
           <label for="admin-name">Nome do admin</label>
-          <input id="admin-name" autocomplete="username" maxlength="30" placeholder="Usuario">
-          <span class="hint"></span>
+          <input id="admin-name" autocomplete="username" maxlength="30" placeholder="Em branco = dono">
+          <span class="hint">Deixe em branco se você é o dono (senha definida no servidor).</span>
         </div>
         <div class="field">
           <label for="admin-pass">Senha do admin</label>
@@ -108,6 +108,14 @@
             <div class="field">
               <label class="aopt"><input type="checkbox" id="f-house"><span>🏠 Casa: as contas da casa participam desta enquete</span></label>
               <span class="hint">Ao confirmar uma resposta, você escolhe quais contas da casa erram (perdem a sequência e ganham o erro no histórico). Se a casa ganhar, as contas escolhidas somam o acerto e mantêm a sequência.</span>
+            </div>
+            <div class="field">
+              <label class="aopt"><input type="checkbox" id="f-opt-points"><span>🎯 Pontos por opção: cada opção tem a sua pontuação</span></label>
+              <span class="hint">Escreva as opções no formato <code>Texto | pontos</code> (uma por linha). Quem votar na opção certa leva os pontos dela; quem errar leva 0. Não combina com odd e não dá para mudar depois de publicar.</span>
+            </div>
+            <div class="field" id="f-show-opt-points-field" hidden>
+              <label class="aopt"><input type="checkbox" id="f-show-opt-points" checked><span>👁️ Mostrar os pontos de cada opção na enquete</span></label>
+              <span class="hint">Desligado, os participantes não veem a pontuação das opções enquanto votam; ela aparece quando o resultado é definido. Você pode mudar a qualquer momento.</span>
             </div>
             <div class="field">
               <label class="aopt"><input type="checkbox" id="f-odds"><span>🎲 Enquete com odd: o participante aposta pontos do ranking</span></label>
