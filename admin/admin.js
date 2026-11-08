@@ -1043,15 +1043,15 @@
     const box = $('#bot-status');
     const rows = [];
     if (!d.twitchConfigured) {
-      rows.push(h('p', { class: 'error' }, 'O servidor está sem as credenciais do bot (BOT_TWITCH_CLIENT_ID e BOT_TWITCH_CLIENT_SECRET): o bot não consegue conectar.'));
+      rows.push(h('p', { class: 'error' }, 'O servidor ta sem aa chaves do bot'));
     }
     rows.push(h('div', { class: 'house-row' },
       h('span', { class: 'nm' }, d.connected ? h('span', {}, '✅ Conta do bot conectada: ', h('b', {}, d.botLogin)) : '⚠️ Nenhuma conta de bot conectada'),
       can('bot') && d.twitchConfigured ? h('a', { class: 'btn ghost small', href: '/api/admin/bot/connect' }, d.connected ? 'Trocar conta' : 'Conectar conta do bot') : null,
       can('bot') && d.connected ? h('button', { class: 'btn danger small', type: 'button', onclick: disconnectBot }, 'Desconectar') : null));
     rows.push(h('p', { class: 'hint' }, d.ownApp
-      ? '🔑 O bot usa o app da Twitch próprio (BOT_TWITCH_CLIENT_ID / BOT_TWITCH_CLIENT_SECRET), separado do login do site.'
-      : 'O bot está usando as mesmas credenciais do login do site. Para usar o app de outra conta, defina BOT_TWITCH_CLIENT_ID e BOT_TWITCH_CLIENT_SECRET no servidor.'));
+      ? 'ta usando as chaves do bot.'
+      : 'ta usando as chaves do login.'));
     // Resultado da última tentativa de conectar (fica na tela, com o motivo)
     const [cr, ...crRest] = String(d.connectResult || '').split('|');
     const crDetail = crRest.join('|');
