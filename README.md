@@ -25,7 +25,7 @@ Ao criar uma enquete no admin, marque **Enquete com odd** (cada enquete decide; 
 
 ## Admins com níveis de acesso
 
-Quem entra com a senha do servidor (`ADMIN_PASSWORD`, deixando o campo "Nome" em branco) é o **dono**: acesso total e único que cria admins. Na aba **🔑 Admins** o dono cadastra outros admins (nome + senha, mínimo 8 caracteres) e marca o que cada um pode fazer:
+Quem entra com a senha do servidor (`ADMIN_PASSWORD`, deixando o campo "Usuário" em branco) é o **dono**: acesso total e único que cria admins. Na aba **🔑 Admins** o dono cadastra outros admins (nome + senha, mínimo 8 caracteres) e marca o que cada um pode fazer:
 
 - **Enquetes:** criar; editar título/descrição/pontos/prazo/casa/tópico; definir odd e tetos; encerrar, reabrir e definir a resposta certa; ocultar/mostrar; excluir.
 - **Outros:** tópicos, contas da casa, usuários (banir/pontos), rankings e pódio, prêmios, conquistas, configurações gerais, aba de testes (que ainda pede a própria senha) e backup.

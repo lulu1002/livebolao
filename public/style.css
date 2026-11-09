@@ -678,3 +678,7 @@ dialog::backdrop { background: var(--backdrop); }
 .bet-input { width: 7.5rem; padding: 0.45rem 0.6rem; font: inherit; border-radius: 8px; border: 1px solid currentColor; background: transparent; color: inherit; }
 
 .pill.cancelled { background: transparent; border: 1px dashed currentColor; opacity: 0.8; }
+
+/* Bloco recolhível dentro de um painel (ex.: configurações gerais do admin) */
+.subpanel { margin-top: 1rem; }
+.subpanel > summary { cursor: pointer; font-weight: 700; padding: 0.4rem 0; }

@@ -260,10 +260,10 @@
       if (p.myVote) return h('p', { class: 'note' }, state.lockVotes ? 'Palpite registrado. Não é possível trocar o voto.' : 'Palpite registrado. Você pode trocar até a votação encerrar.');
       return h('p', { class: 'note' }, p.optionPoints
         ? (p.optionPointsHidden
-          ? 'Cada opção vale uma pontuação diferente, mas os valores só aparecem depois do resultado. Acertando, você leva os pontos da opção certa.'
-          : 'Cada opção vale uma pontuação diferente (veja ao lado de cada uma). Acertando, você leva os pontos da opção certa.')
+          ? 'Cada opção vale pontos diferentes, mostrados só depois do resultado.'
+          : 'Cada opção vale pontos diferentes (veja ao lado de cada uma).')
         : p.poolOdds
-        ? `Toque em uma opção para dar seu palpite. Os ${p.points} pontos da enquete são divididos entre quem acertar: quanto menos gente na opção certa, maior a sua parte.`
+        ? `Os ${p.points} pontos são divididos entre quem acertar: menos gente na certa, parte maior.`
         : 'Toque em uma opção para dar seu palpite.');
     }
     if (!state.user) return null;
@@ -314,7 +314,7 @@
     } else if (!draft) {
       lines.push(h('p', { class: 'note' }, p.myVote
         ? 'Toque em uma opção para trocar sua aposta.'
-        : 'Toque em uma opção, depois diga quantos pontos quer apostar. Quanto menos gente na opção certa, maior o prêmio.'));
+        : 'Toque numa opção e diga quantos pontos apostar. Menos gente na certa, maior o prêmio.'));
     } else {
       const opt = p.options.find((o) => o.id === draft.optionId);
       const stake = Number(draft.stake) || 0;

@@ -31,9 +31,8 @@
       <h1>Acesso do admin</h1>
       <form id="login-form">
         <div class="field">
-          <label for="admin-name">Nome do admin</label>
-          <input id="admin-name" autocomplete="username" maxlength="30" placeholder="Em branco = dono">
-          <span class="hint">Deixe em branco se você é o dono (senha definida no servidor).</span>
+          <label for="admin-name">Usuário</label>
+          <input id="admin-name" autocomplete="username" maxlength="30">
         </div>
         <div class="field">
           <label for="admin-pass">Senha do admin</label>
@@ -64,27 +63,47 @@
       <div id="apane-create" role="tabpanel" aria-labelledby="atab-create" hidden>
         <section class="panel narrow-md" id="form-panel" data-need="polls_create|polls_edit|polls_odds">
           <h2 id="form-title">Nova enquete</h2>
-          <fieldset class="modes" data-need="settings">
-            <legend>Ao publicar uma nova enquete (vale dentro do mesmo tópico)</legend>
-            <label class="aopt"><input type="radio" name="mode" value="replace"><span>Substituir a enquete do mesmo tópico na página principal</span></label>
-            <label class="aopt"><input type="radio" name="mode" value="accumulate"><span>Acumular com as anteriores</span></label>
-            <span class="hint">Enquetes substituídas saem da página, mas continuam aqui no painel e valem pontos quando você define a resposta.</span>
-          </fieldset>
-          <fieldset class="modes" data-need="settings">
-            <legend>Trava de voto</legend>
-            <label class="aopt"><input type="checkbox" id="lock-votes"><span>🔒 Não deixar o participante trocar o voto: votou, está votado</span></label>
-            <span class="hint">Vale para todas as enquetes (normais e com odd), inclusive as que já têm votos. Desligado, dá para trocar o voto até a votação encerrar.</span>
-          </fieldset>
-          <fieldset class="modes" data-need="settings">
-            <legend>Notificações</legend>
-            <label class="aopt"><input type="checkbox" id="notify-global"><span>Enquete nova: avisar os inscritos quando for publicada</span></label>
-            <span class="hint" id="notify-global-hint">Chave geral: desligada, nenhuma publicação envia notificação, mesmo com a caixa da enquete marcada.</span>
-            <label class="aopt"><input type="checkbox" id="notify-result"><span>Resultado: avisar cada participante se acertou ou não, quando você define a resposta</span></label>
-            <label class="aopt"><input type="checkbox" id="notify-closing"><span>Enquete fechando: lembrar, cerca de 1 hora antes, quem ainda não votou</span></label>
-            <span class="hint" id="notify-extra-hint"></span>
-          </fieldset>
           <form id="poll-form">
+            <fieldset class="modes type-box" id="f-type-box">
+              <legend>🎛️ Tipo de enquete</legend>
+              <span class="hint">Tudo desmarcado = enquete normal. Escolha só um tipo.</span>
+<div class="field">
+              <label class="aopt"><input type="checkbox" id="f-opt-points"><span>🎯 Pontos por opção: cada opção tem a sua pontuação</span></label>
+              <span class="hint">Opções no formato <code>Texto | pontos</code> (0 a 1000), uma por linha. Acertou leva os pontos da opção; errou, 0. Não muda depois de publicar.</span>
+            </div>
+            <div class="field" id="f-sum-points-field" hidden>
+              <label class="aopt"><input type="checkbox" id="f-sum-points"><span>➕ Somar os pontos da enquete aos pontos da opção</span></label>
+              <span class="hint">Ligado: acerto = pontos da enquete <b>+</b> pontos da opção (ex.: 10 + 5 = 15). Desligado: só os da opção.</span>
+            </div>
+            <div class="field" id="f-show-opt-points-field" hidden>
+              <label class="aopt"><input type="checkbox" id="f-show-opt-points" checked><span>👁️ Mostrar aos participantes os pontos que cada opção dá</span></label>
+              <span class="hint">Desligado, os pontos só aparecem aos participantes depois do resultado.</span>
+            </div>
             <div class="field">
+              <label class="aopt"><input type="checkbox" id="f-odds"><span>🎲 Enquete com odd: o participante aposta pontos do ranking</span></label>
+              <span class="hint" id="f-odds-hint">Acerto = aposta × odd (apostadores ÷ apostadores na opção); erro = perde a aposta. Não muda depois do primeiro voto.</span>
+            </div>
+            <div id="f-odds-limits" hidden>
+              <div class="field">
+                <label for="f-odds-kind">Tipo de odd</label>
+                <select id="f-odds-kind">
+                  <option value="stake">Aposta: cada participante usa pontos do próprio ranking</option>
+                  <option value="pool">Prêmio fixo: os pontos da enquete são divididos entre quem acertar</option>
+                </select>
+                <span class="hint" id="f-odds-kind-hint"></span>
+              </div>
+              <div class="field" id="f-max-stake-field">
+                <label for="f-max-stake">Aposta máxima por pessoa (pontos, opcional)</label>
+                <input id="f-max-stake" type="number" min="1" step="1" placeholder="Sem limite">
+              </div>
+              <div class="field">
+                <label for="f-max-win">Ganho máximo por pessoa (pontos, opcional)</label>
+                <input id="f-max-win" type="number" min="1" step="1" placeholder="Sem limite">
+                <span class="hint" id="f-max-win-hint">Teto do lucro de quem acertar. Vazio = sem teto.</span>
+              </div>
+            </div>
+            </fieldset>
+                        <div class="field">
               <label for="f-title">Pergunta</label>
               <input id="f-title" maxlength="200" required>
             </div>
@@ -108,42 +127,7 @@
             </div>
             <div class="field">
               <label class="aopt"><input type="checkbox" id="f-house"><span>🏠 Casa: as contas da casa participam desta enquete</span></label>
-              <span class="hint">Ao confirmar uma resposta, você escolhe quais contas da casa erram (perdem a sequência e ganham o erro no histórico). Se a casa ganhar, as contas escolhidas somam o acerto e mantêm a sequência.</span>
-            </div>
-            <div class="field">
-              <label class="aopt"><input type="checkbox" id="f-opt-points"><span>🎯 Pontos por opção: cada opção tem a sua pontuação</span></label>
-              <span class="hint">Escreva as opções no formato <code>Texto | pontos</code> (uma por linha). Quem votar na opção certa leva os pontos dela (de 0 a 1000; 0 vale como acerto, mas sem pontos); quem errar leva 0. Não combina com odd e não dá para mudar depois de publicar.</span>
-            </div>
-            <div class="field" id="f-sum-points-field" hidden>
-              <label class="aopt"><input type="checkbox" id="f-sum-points"><span>➕ Somar os pontos da enquete aos pontos da opção</span></label>
-              <span class="hint">Ligado: quem acerta leva os “Pontos por acerto” da enquete <b>mais</b> os pontos da opção certa (ex.: enquete 10 + opção 5 = 15). Desligado: só os pontos da opção. Dá para mudar a qualquer momento.</span>
-            </div>
-            <div class="field" id="f-show-opt-points-field" hidden>
-              <label class="aopt"><input type="checkbox" id="f-show-opt-points" checked><span>👁️ Mostrar aos participantes os pontos que cada opção dá</span></label>
-              <span class="hint">Desligado, os participantes não veem quanto cada opção dá (o total que levariam) enquanto votam; aparece quando o resultado é definido. Você pode mudar a qualquer momento.</span>
-            </div>
-            <div class="field">
-              <label class="aopt"><input type="checkbox" id="f-odds"><span>🎲 Enquete com odd: o participante aposta pontos do ranking</span></label>
-              <span class="hint" id="f-odds-hint">Quem acerta recebe aposta × odd (total de apostadores ÷ apostadores na opção); quem erra perde a aposta. Os “Pontos por acerto” acima só valem se a casa ganhar. Só dá para ligar ou desligar antes do primeiro voto.</span>
-            </div>
-            <div id="f-odds-limits" hidden>
-              <div class="field">
-                <label for="f-odds-kind">Tipo de odd</label>
-                <select id="f-odds-kind">
-                  <option value="stake">Aposta: cada participante usa pontos do próprio ranking</option>
-                  <option value="pool">Prêmio fixo: os pontos da enquete são divididos entre quem acertar</option>
-                </select>
-                <span class="hint" id="f-odds-kind-hint"></span>
-              </div>
-              <div class="field" id="f-max-stake-field">
-                <label for="f-max-stake">Aposta máxima por pessoa (pontos, opcional)</label>
-                <input id="f-max-stake" type="number" min="1" step="1" placeholder="Sem limite">
-              </div>
-              <div class="field">
-                <label for="f-max-win">Ganho máximo por pessoa (pontos, opcional)</label>
-                <input id="f-max-win" type="number" min="1" step="1" placeholder="Sem limite">
-                <span class="hint" id="f-max-win-hint">Teto do lucro líquido de quem acertar. Em branco, o prêmio é só aposta × odd.</span>
-              </div>
+              <span class="hint">Ao definir a resposta, você escolhe quais contas da casa erram. Se a casa ganhar, as escolhidas acertam.</span>
             </div>
             <div class="field" id="f-notify-field">
               <label class="aopt"><input type="checkbox" id="f-notify" checked><span>Notificar os inscritos ao publicar esta enquete</span></label>
@@ -155,6 +139,28 @@
               <button class="btn ghost" id="form-cancel" type="button" hidden>Cancelar edição</button>
             </div>
           </form>
+          <details class="subpanel" id="general-settings">
+            <summary>⚙️ Configurações gerais (valem para todas as enquetes)</summary>
+            <fieldset class="modes" data-need="settings">
+            <legend>Ao publicar uma nova enquete (vale dentro do mesmo tópico)</legend>
+            <label class="aopt"><input type="radio" name="mode" value="replace"><span>Substituir a enquete do mesmo tópico na página principal</span></label>
+            <label class="aopt"><input type="radio" name="mode" value="accumulate"><span>Acumular com as anteriores</span></label>
+            <span class="hint">Enquetes substituídas saem da página, mas continuam aqui e valem pontos.</span>
+          </fieldset>
+          <fieldset class="modes" data-need="settings">
+            <legend>Trava de voto</legend>
+            <label class="aopt"><input type="checkbox" id="lock-votes"><span>🔒 Não deixar o participante trocar o voto: votou, está votado</span></label>
+            <span class="hint">Vale para todas as enquetes, inclusive as com votos. Desligado, dá para trocar o voto até encerrar.</span>
+          </fieldset>
+          <fieldset class="modes" data-need="settings">
+            <legend>Notificações</legend>
+            <label class="aopt"><input type="checkbox" id="notify-global"><span>Enquete nova: avisar os inscritos quando for publicada</span></label>
+            <span class="hint" id="notify-global-hint">Chave geral: desligada, nenhuma publicação envia notificação.</span>
+            <label class="aopt"><input type="checkbox" id="notify-result"><span>Resultado: avisar cada participante se acertou ou não, quando você define a resposta</span></label>
+            <label class="aopt"><input type="checkbox" id="notify-closing"><span>Enquete fechando: lembrar, cerca de 1 hora antes, quem ainda não votou</span></label>
+            <span class="hint" id="notify-extra-hint"></span>
+          </fieldset>
+          </details>
         </section>
       </div>
 
@@ -171,7 +177,7 @@
 
         <details class="panel narrow-md" id="topics-panel" data-need="topics">
           <summary>⚙️ Gerenciar tópicos</summary>
-          <p class="hint">Os tópicos viram as divisórias da página principal (ex.: Geral, Casa). Ao criar uma enquete você escolhe o tópico; dá para mudar depois no botão Mover. Só dá para apagar um tópico vazio.</p>
+          <p class="hint">Tópicos são as divisórias da página principal. Escolha ao criar a enquete (dá para mudar em Mover). Só apaga tópico vazio.</p>
           <div id="topic-list" class="alist"></div>
           <form id="topic-form">
             <div class="field">
@@ -187,7 +193,7 @@
       <div id="apane-house" data-need="house" role="tabpanel" aria-labelledby="atab-house" hidden>
       <section class="panel" id="house-panel">
         <h2>🏠 Contas da casa</h2>
-        <p class="hint">Quando nenhuma opção bate, resolva a enquete como "🏠 A casa ganha" e escolha pra qual(is) dessas contas os pontos vão.</p>
+        <p class="hint">Se ninguém acertar, resolva como “🏠 A casa ganha” e escolha quais contas levam os pontos.</p>
         <div class="admin-grid">
           <form id="house-form">
             <input type="hidden" id="house-id" value="">
@@ -224,7 +230,7 @@
               <input id="s-bonus" type="number" min="0" max="1000" step="1" value="0">
             </div>
           </div>
-          <p class="hint">Use 0 para desativar. Só contam as enquetes em que a pessoa votou, e um erro zera a sequência. A regra vale para todo o ranking e é recalculada na hora.</p>
+          <p class="hint">Use 0 para desativar. Só contam enquetes em que a pessoa votou; um erro zera a sequência. Recalcula na hora.</p>
           <p class="error" id="streak-error" role="alert"></p>
           <button class="btn" type="submit">Salvar bônus</button>
         </form>
@@ -268,7 +274,7 @@
                 <input id="ach-image" type="url" placeholder="https://...">
               </div>
             </div>
-            <span class="hint">Sem imagem, mostra o emoji. Com imagem, ela substitui o emoji no ranking e no perfil.</span>
+            <span class="hint">Sem imagem, mostra o emoji; com imagem, ela o substitui.</span>
             <p class="error" id="ach-error" role="alert"></p>
             <div class="actions">
               <button class="btn" id="ach-submit" type="submit">Adicionar nível</button>
@@ -283,9 +289,9 @@
       <div id="apane-prizes" data-need="prizes" role="tabpanel" aria-labelledby="atab-prizes" hidden>
       <section class="panel" id="prize-panel">
         <h2>Prêmios</h2>
-        <p class="hint">Cada prêmio tem um só dono: a primeira pessoa a chegar nos pontos do ranking geral leva, e quem chegar depois não ganha.</p>
+        <p class="hint">Cada prêmio tem um só dono: quem chegar primeiro nos pontos do ranking geral.</p>
         <label class="aopt"><input type="checkbox" id="notify-prize"><span>Avisar os inscritos quando alguém conquistar um prêmio</span></label>
-        <span class="hint" id="notify-prize-hint">A notificação diz o nome de quem conquistou e o nome do prêmio.</span>
+        <span class="hint" id="notify-prize-hint">A notificação cita o ganhador e o prêmio.</span>
         <div class="admin-grid">
           <form id="prize-form">
             <div class="field">
@@ -310,7 +316,7 @@
                 <input id="prize-image" type="url" placeholder="https://...">
               </div>
             </div>
-            <span class="hint">Sem imagem, mostra o emoji. Com imagem, ela substitui o emoji no ranking e no perfil.</span>
+            <span class="hint">Sem imagem, mostra o emoji; com imagem, ela o substitui.</span>
             <p class="error" id="prize-error" role="alert"></p>
             <div class="actions">
               <button class="btn" id="prize-submit" type="submit">Criar prêmio</button>
@@ -338,7 +344,7 @@
       <section class="panel narrow-md" id="tests-panel">
         <h2>🧪 Painel de testes</h2>
         <form id="tests-lock" hidden>
-          <p class="hint" id="tests-lock-hint">Área protegida. Digite a senha da aba Testes (variável <code>TESTS_PASSWORD</code> no servidor). O acesso se fecha sozinho depois de 1 hora.</p>
+          <p class="hint" id="tests-lock-hint">Área protegida: digite a senha da aba Testes (<code>TESTS_PASSWORD</code>). Fecha sozinha em 1 hora.</p>
           <div class="field">
             <label for="tests-pass">Senha da aba Testes</label>
             <input id="tests-pass" type="password" autocomplete="off">
@@ -347,7 +353,7 @@
           <button class="btn" type="submit">Entrar</button>
         </form>
         <div id="tests-body" hidden>
-        <p class="hint">Crie participantes fictícios para testar votos, apostas, odds e ranking sozinho. Eles aparecem no ranking com 🧪, mas não ganham prêmio único nem entram no pódio semanal. Use “Apagar contas de teste” no fim: some tudo deles (votos, pontos, emblemas).</p>
+        <p class="hint">Crie participantes fictícios para testar votos, apostas e ranking. Aparecem com 🧪, sem prêmio único nem pódio. “Apagar contas de teste” remove tudo deles.</p>
         <div class="field">
           <label for="test-count">Criar contas de teste</label>
           <div class="actions">
@@ -379,7 +385,7 @@
       <div id="apane-admins" role="tabpanel" aria-labelledby="atab-admins" hidden>
       <section class="panel narrow-md">
         <h2>🔑 Admins e níveis de acesso</h2>
-        <p class="hint">Você é o dono (entra só com a senha do servidor) e tem acesso a tudo. Cada admin entra com nome + senha e só faz o que estiver marcado aqui. Mudar as permissões vale na hora, sem ele precisar sair.</p>
+        <p class="hint">Você (dono) tem acesso a tudo. Cada admin entra com nome + senha e só faz o que estiver marcado. Mudanças valem na hora.</p>
         <div id="admin-list" class="alist"></div>
         <form id="admin-form">
           <h3 id="admin-form-title">Novo admin</h3>
@@ -399,7 +405,7 @@
       <div id="apane-bot" data-need="bot" role="tabpanel" aria-labelledby="atab-bot" hidden>
       <section class="panel narrow-md">
         <h2>🤖 Bot da Twitch</h2>
-        <p class="hint">O bot escreve no chat da sua live quando uma enquete é criada, quando sai o resultado e quando alguém conquista um prêmio (marcando o ganhador).</p>
+        <p class="hint">O bot avisa no chat da live quando uma enquete é criada, sai o resultado ou alguém ganha um prêmio.</p>
         <div id="bot-status" class="alist"></div>
         <form id="bot-form">
           <div class="field"><label class="aopt"><input type="checkbox" id="bot-enabled"><span>🤖 Bot ligado</span></label></div>
@@ -421,7 +427,7 @@
       <div id="apane-log" role="tabpanel" aria-labelledby="atab-log" hidden>
       <section class="panel narrow-md">
         <h2>📜 Histórico de ações</h2>
-        <p class="hint">Quem fez o quê no painel (os 6 meses mais recentes). Só o dono vê esta aba. Senhas nunca são registradas.</p>
+        <p class="hint">Quem fez o quê no painel (últimos 6 meses). Só o dono vê. Senhas nunca são gravadas.</p>
         <div class="field">
           <label for="log-filter">Filtrar por admin</label>
           <select id="log-filter"><option value="">Todos</option></select>
@@ -434,9 +440,9 @@
       <div id="apane-hall" data-need="ranking" role="tabpanel" aria-labelledby="atab-hall" hidden>
       <section class="panel narrow-md" id="hall-panel">
         <h2>hall da fama</h2>
-        <p class="hint">O pódio (1º ao 3º) de cada semana é gravado quando você clica em Zerar semanal ou Zerar geral.</p>
+        <p class="hint">O pódio (1º ao 3º) da semana é gravado ao zerar o ranking semanal ou geral.</p>
         <label class="aopt"><input type="checkbox" id="hall-visible"><span>Mostrar o Hall da fama para os participantes</span></label>
-        <span class="hint">Desligado, a aba some do ranking e o hall some do perfil. Nada é apagado, e as conquistas de título continuam funcionando (use Ocultar na aba Conquistas se quiser esconder também).</span>
+        <span class="hint">Desligado, esconde a aba do ranking e o hall do perfil. Nada é apagado.</span>
         <div id="hall-list" class="alist"></div>
       </section>
       </div>
@@ -493,9 +499,9 @@
       <p id="reopen-desc">Esta enquete já tem resposta e soma pontos no ranking. O que fazer com esses pontos?</p>
       <div class="choices">
         <button class="btn" type="button" data-choice="keep">Manter os pontos</button>
-        <p class="hint" id="reopen-hint-keep">Os pontos continuam no ranking e os votos desta enquete são limpos, para valer como uma nova rodada.</p>
+        <p class="hint" id="reopen-hint-keep">Pontos mantidos; os votos são limpos para uma nova rodada.</p>
         <button class="btn danger" type="button" data-choice="zero">Zerar os pontos desta enquete</button>
-        <p class="hint" id="reopen-hint-zero">Os pontos dela saem do ranking. Os votos são mantidos e os participantes podem trocá-los.</p>
+        <p class="hint" id="reopen-hint-zero">Os pontos dela saem do ranking; os votos ficam e podem ser trocados.</p>
       </div>
       <button class="btn ghost" id="reopen-cancel" type="button">Cancelar</button>
     </div>
