@@ -358,3 +358,41 @@ alter table hall_places   enable row level security;
 alter table point_adjustments enable row level security;
 alter table prizes        enable row level security;
 alter table prize_removed enable row level security;
+
+-- Chat global (sidebar). Só quem está logado vê e envia. Admin com permissão "chat" modera.
+create table if not exists chat_messages (
+  id          bigserial primary key,
+  user_id     text not null references users(id) on delete cascade,
+  body        text not null default '' check (char_length(body) <= 500),
+  created_at  timestamptz not null default now(),
+  deleted_at  timestamptz,
+  deleted_by  text
+);
+create index if not exists chat_messages_created_idx on chat_messages (created_at desc);
+create index if not exists chat_messages_alive_idx on chat_messages (id desc) where deleted_at is null;
+
+-- Silenciados no chat (1h, 24h ou permanente até desmutar)
+create table if not exists chat_mutes (
+  user_id     text primary key references users(id) on delete cascade,
+  muted_by    text,
+  reason      text,
+  until       timestamptz,          -- null = permanente
+  created_at  timestamptz not null default now()
+);
+
+alter table chat_messages enable row level security;
+alter table chat_mutes    enable row level security;
+
+
+-- Anexos de mídia no chat (URL http/https). media_type: image | video
+alter table chat_messages add column if not exists media_url text;
+alter table chat_messages add column if not exists media_type text;
+
+
+-- Permite mensagem só com mídia (body vazio)
+alter table chat_messages drop constraint if exists chat_messages_body_check;
+alter table chat_messages add constraint chat_messages_body_check check (char_length(body) <= 500);
+
+
+-- Cor do nome escolhida pelo usuário (identidade). Hex da paleta permitida no servidor.
+alter table users add column if not exists name_color text;

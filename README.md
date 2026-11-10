@@ -49,6 +49,14 @@ A conta do bot tem que ser **separada**: o sistema recusa a conta dona do canal 
 
 Dica: dê `/mod` ao bot no seu canal, para o chat não barrar mensagens (modo só-seguidores, lentidão etc.). As mensagens saem em fila, uma a cada ~1,5 s. O acesso do bot fica só no servidor (tabela `bot_auth`) e é renovado sozinho. Quem tem a permissão “Bot da Twitch” conecta, configura e testa; os outros admins só veem.
 
+## Chat
+
+Botão 💬 no site (só para quem está logado): chat global em tempo real, com menções (`@login`), anexos de imagem e vídeo **por link** (http/https), preview automático de links de imagem, e 🎨 para cada pessoa escolher a **cor do nome** (aparece no chat, ranking e perfil). Guarda as últimas 100 mensagens; limite de 30 por minuto e 500 caracteres.
+
+Aba **💬 Chat** do admin: liga/desliga o chat, liga/desliga imagens, vídeos e preview de links (quem tem a permissão “Configurações gerais”) e a moderação (permissão “Moderar o chat”): apagar mensagens (ficam marcadas para a moderação), remover do banco, silenciar por 1 h, 24 h ou permanente (com motivo) e tirar o silêncio. As ações de moderação entram no Histórico.
+
+As mensagens só chegam a conexões de quem está logado. O banco é atualizado sozinho no deploy (tabelas `chat_messages` e `chat_mutes`, colunas `users.name_color` e as de mídia).
+
 ## Cancelar enquete
 
 O botão **Cancelar e devolver pontos** (permissão “encerrar, reabrir e definir resposta”) deixa a enquete na lista como *Cancelada*: ninguém ganha nem perde pontos por ela, as apostas são devolvidas (o saldo volta na hora) e, se ela já tinha resultado, os pontos que deu ou tirou também saem do ranking. Os votos continuam registrados e **Reabrir votação** desfaz o cancelamento. Para apagar de vez, use Excluir.

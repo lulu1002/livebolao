@@ -147,6 +147,7 @@ const PERMISSIONS = [
   { key: 'tests', group: 'Outros', label: 'Aba de testes (ainda pede a senha dela)' },
   { key: 'bot', group: 'Outros', label: 'Bot da Twitch (conectar, configurar e testar)' },
   { key: 'backup', group: 'Outros', label: 'Baixar backup' },
+  { key: 'chat', group: 'Outros', label: 'Moderar o chat (apagar mensagens e silenciar)' },
 ];
 const PERMISSION_KEYS = PERMISSIONS.map((p) => p.key);
 
@@ -340,6 +341,35 @@ const GAIN_SQL = `case
         coalesce(p.max_win, 2147483647))
     else -v.stake
   end`;
+
+// Chat global: ligado por padrão; só desliga quando o admin salva '0' em settings.chat_enabled.
+async function getChatEnabled() {
+  return getFlag('chat_enabled');
+}
+// Mídia no chat: imagens, vídeos e auto-embed de links de imagem (png/jpeg…). Ligados por padrão.
+async function getChatMediaFlags() {
+  const [images, videos, embedLinks] = await Promise.all([
+    getFlag('chat_images'),
+    getFlag('chat_videos'),
+    getFlag('chat_embed_links'),
+  ]);
+  return { images, videos, embedLinks };
+}
+function parseChatMediaUrl(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return null;
+  let u;
+  try { u = new URL(s); } catch (_) { return { error: 'URL de mídia inválida.' }; }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return { error: 'A mídia precisa ser um link http ou https.' };
+  if (s.length > 2000) return { error: 'URL de mídia muito longa.' };
+  return { url: s };
+}
+function guessMediaType(url) {
+  const path = String(url).split('?')[0].split('#')[0].toLowerCase();
+  if (/\.(png|jpe?g|gif|webp|avif)$/i.test(path)) return 'image';
+  if (/\.(mp4|webm|ogg|mov)$/i.test(path)) return 'video';
+  return null;
+}
 
 // Trava de voto: ligada, quem já votou numa enquete não pode trocar nem refazer a aposta. Desligada por padrão.
 async function getLockVotes() {
@@ -597,7 +627,7 @@ async function syncPrizes(list, openPrizes, removed, reachByUser) {
 async function computeStandings() {
   const { general: generalResetAt } = await getResetAts();
   const [users, results, rounds, rule, achDefs, titleRows, adjRows, prizeRows, removedRows] = await Promise.all([
-    q('select id, display_name, login, avatar_url, is_house, is_test from users where not banned'),
+    q('select id, display_name, login, avatar_url, is_house, is_test, name_color from users where not banned'),
     q(
       `select r.user_id, r.poll_title, r.chosen, r.correct, r.points, r.hit, r.at, r.gain, r.stake
        from (
@@ -637,6 +667,7 @@ async function computeStandings() {
     avatar: u.avatar_url,
     isHouse: u.is_house,
     isTest: u.is_test,
+    nameColor: normalizeNameColor(u.name_color),
     points: 0,
     hits: 0,
     played: 0,
@@ -757,7 +788,7 @@ async function computeStandings() {
 async function computeWeeklyStandings() {
   const { weekly: weeklyResetAt } = await getResetAts();
   const [users, totals, adj] = await Promise.all([
-    q('select id, display_name, login, avatar_url, is_house, is_test from users where not banned'),
+    q('select id, display_name, login, avatar_url, is_house, is_test, name_color from users where not banned'),
     q(
       `select r.user_id,
               coalesce(sum(r.gain), 0)::int as points,
@@ -789,6 +820,7 @@ async function computeWeeklyStandings() {
       avatar: u.avatar_url,
       isHouse: u.is_house,
       isTest: u.is_test,
+      nameColor: normalizeNameColor(u.name_color),
       points: (t ? t.points : 0) + (adjByUser.get(u.id) || 0),
       hits: t ? t.hits : 0,
       played: t ? t.played : 0,
@@ -879,7 +911,7 @@ app.use((req, res, next) => {
     'Content-Security-Policy',
     "default-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; " +
       // img-src aceita qualquer https: porque o admin escolhe o link da imagem de cada conquista
-      "img-src 'self' data: https:; script-src 'self'; frame-ancestors 'none'"
+      "img-src 'self' data: https:; media-src 'self' https:; script-src 'self'; frame-ancestors 'none'"
   );
   next();
 });
@@ -896,8 +928,16 @@ const sseClients = new Set();
 function broadcast() {
   for (const res of sseClients) res.write(`event: update\ndata: ${Date.now()}\n\n`);
 }
+function broadcastChat(payload) {
+  const data = JSON.stringify(payload);
+  // O canal de eventos é aberto a visitantes: o chat só é entregue a conexões de quem está logado
+  for (const res of sseClients) if (res.chatUser) res.write(`event: chat\ndata: ${data}\n\n`);
+}
 
-app.get('/api/events', (req, res) => {
+app.get('/api/events', wrap(async (req, res) => {
+  let chatUser = null;
+  try { chatUser = await currentUser(req); } catch (_) { /* visitante */ }
+  res.chatUser = chatUser ? chatUser.id : null;
   res.set({
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache, no-transform',
@@ -908,7 +948,7 @@ app.get('/api/events', (req, res) => {
   res.write('retry: 3000\n\n');
   sseClients.add(res);
   req.on('close', () => sseClients.delete(res));
-});
+}));
 
 // Batida a cada 25s para o proxy do Render não derrubar conexões ociosas
 setInterval(() => {
@@ -955,6 +995,11 @@ const ADMIN_ACTIONS = [
   ['PUT', /^\/achievements\/[^/]+$/, 'Editou uma conquista', (b) => nameOf(b)],
   ['POST', /^\/achievements\/[^/]+\/active$/, 'Ativou/desativou uma conquista'],
   ['DELETE', /^\/achievements\/[^/]+$/, 'Excluiu uma conquista'],
+  ['DELETE', /^\/chat\/\d+$/, 'Apagou uma mensagem do chat'],
+  ['DELETE', /^\/chat\/\d+\/purge$/, 'Removeu uma mensagem do chat do banco'],
+  ['POST', /^\/chat\/purge-deleted$/, 'Removeu do banco as mensagens apagadas do chat'],
+  ['POST', /^\/chat\/mute$/, 'Silenciou um usuário no chat', (b, c) => `${c.user || ''} (${b?.duration || 'permanent'})${b?.reason ? ` — ${b.reason}` : ''}`],
+  ['DELETE', /^\/chat\/mute\/[^/]+$/, 'Tirou o silêncio de um usuário no chat', (b, c) => c.user],
   ['POST', /^\/bot\/config$/, 'Mudou a configuração do bot da Twitch'],
   ['POST', /^\/bot\/test$/, 'Enviou mensagem de teste do bot'],
   ['POST', /^\/bot\/disconnect$/, 'Desconectou a conta do bot'],
@@ -964,12 +1009,13 @@ const ADMIN_ACTIONS = [
 ];
 
 // Busca o nome do que vai ser alterado ANTES da ação (depois de excluir, já não dá para ler)
-async function actionContext(path) {
+async function actionContext(path, body) {
   const ctx = {};
   let m;
   try {
     if ((m = path.match(/^\/polls\/([^/]+)/))) ctx.title = (await q('select title from polls where id = $1', [m[1]])).rows[0]?.title;
-    else if ((m = path.match(/^\/(?:users|house-accounts)\/([^/]+)/))) ctx.user = (await q('select display_name from users where id = $1', [m[1]])).rows[0]?.display_name;
+    else if (path === '/chat/mute' && body && body.userId) ctx.user = (await q('select display_name from users where id = $1', [String(body.userId)])).rows[0]?.display_name;
+    else if ((m = path.match(/^\/(?:users|house-accounts|chat\/mute)\/([^/]+)/))) ctx.user = (await q('select display_name from users where id = $1', [m[1]])).rows[0]?.display_name;
     else if ((m = path.match(/^\/topics\/([^/]+)/))) ctx.name = (await q('select name from poll_topics where id = $1', [m[1]])).rows[0]?.name;
     else if ((m = path.match(/^\/admins\/([^/]+)/))) ctx.admin = (await q('select name from admins where id = $1', [m[1]])).rows[0]?.name;
   } catch (_) { /* o histórico nunca pode derrubar a ação */ }
@@ -999,7 +1045,7 @@ app.use('/api/admin', (req, res, next) => {
       if (res.statusCode < 400) broadcast();
     });
   }
-  actionContext(path).then((ctx) => {
+  actionContext(path, req.body).then((ctx) => {
     res.on('finish', () => {
       if (res.statusCode < 400) logAdminAction(req, ctx, path).catch((e) => console.error('[historico]', e.message));
     });
@@ -1153,7 +1199,37 @@ const requireOwner = wrap(async (req, res, next) => {
   if (!req.admin.owner) return res.status(403).json({ error: 'Só o dono pode gerenciar admins.' });
   next();
 });
-const userView = (u) => ({ id: u.id, name: u.display_name, login: u.login, avatar: u.avatar_url });
+// Cores de nome permitidas (identidade). null = cor padrão do tema.
+const NAME_COLORS = [
+  { id: 'default', label: 'Padrão', value: null },
+  { id: 'red', label: 'Vermelho', value: '#E74C3C' },
+  { id: 'orange', label: 'Laranja', value: '#E67E22' },
+  { id: 'gold', label: 'Dourado', value: '#D4A017' },
+  { id: 'green', label: 'Verde', value: '#27AE60' },
+  { id: 'teal', label: 'Água', value: '#1ABC9C' },
+  { id: 'blue', label: 'Azul', value: '#3498DB' },
+  { id: 'purple', label: 'Roxo', value: '#9B59B6' },
+  { id: 'pink', label: 'Rosa', value: '#E91E63' },
+  { id: 'gray', label: 'Cinza', value: '#95A5A6' },
+];
+const NAME_COLOR_VALUES = new Set(NAME_COLORS.map((c) => c.value).filter(Boolean));
+function normalizeNameColor(v) {
+  if (v == null || v === '' || v === 'default') return null;
+  const s = String(v).trim().toUpperCase();
+  // aceita hex da paleta (case-insensitive)
+  for (const allowed of NAME_COLOR_VALUES) {
+    if (allowed.toUpperCase() === s) return allowed;
+  }
+  return null;
+}
+const userView = (u) => ({
+  id: u.id,
+  name: u.display_name,
+  login: u.login,
+  avatar: u.avatar_url,
+  nameColor: normalizeNameColor(u.name_color),
+});
+
 
 /* ---------- Saúde (Render) ---------- */
 app.get('/healthz', (req, res) => res.type('text').send('ok'));
@@ -1249,8 +1325,30 @@ app.post('/api/logout', wrap(async (req, res) => {
 
 app.get('/api/me', wrap(async (req, res) => {
   const u = await currentUser(req);
-  res.json({ user: u ? userView(u) : null });
+  const [chatEnabled, chatMedia] = await Promise.all([getChatEnabled(), getChatMediaFlags()]);
+  res.json({
+    user: u ? userView(u) : null,
+    chatEnabled,
+    chatMedia,
+    nameColors: NAME_COLORS,
+  });
 }));
+
+app.post('/api/me/name-color', requireUser, limit('name-color', 20, 60 * 1000), wrap(async (req, res) => {
+  const color = normalizeNameColor(req.body?.color);
+  // body.color pode ser null/'default' para resetar
+  const raw = req.body?.color;
+  const wantsDefault = raw === null || raw === '' || raw === 'default';
+  const value = wantsDefault ? null : color;
+  if (!wantsDefault && value == null) {
+    return res.status(400).json({ error: 'Cor inválida. Escolha uma da paleta.' });
+  }
+  await q('update users set name_color = $2 where id = $1', [req.user.id, value]);
+  const { rows } = await q('select * from users where id = $1', [req.user.id]);
+  broadcast(); // ranking e outros clientes atualizam a cor
+  res.json({ user: userView(rows[0]) });
+}));
+
 
 /* ---------- Notificações (Web Push) ---------- */
 app.get('/api/push/public-key', (req, res) => {
@@ -1316,7 +1414,8 @@ app.get('/api/polls', wrap(async (req, res) => {
   });
   // Saldo só é calculado quando há enquete com odd na página e a pessoa está logada
   const balance = u && polls.some((p) => p.odds) ? await availableBalance(u.id) : null;
-  res.json({ polls, topics: await fetchTopics(), lockVotes: await getLockVotes(), balance });
+  const [chatEnabled, chatMedia] = await Promise.all([getChatEnabled(), getChatMediaFlags()]);
+  res.json({ polls, topics: await fetchTopics(), lockVotes: await getLockVotes(), balance, chatEnabled, chatMedia });
 }));
 
 /* Saldo para apostar = pontos do ranking geral − o que está apostado em enquetes ainda sem resultado */
@@ -1567,6 +1666,10 @@ app.get('/api/admin/polls', requireAdmin, wrap(async (req, res) => {
     notifyClosing: await getFlag('notify_closing'),
     hallVisible: await getFlag('hall_visible'),
     lockVotes: await getLockVotes(),
+    chatEnabled: await getChatEnabled(),
+    chatImages: (await getChatMediaFlags()).images,
+    chatVideos: (await getChatMediaFlags()).videos,
+    chatEmbedLinks: (await getChatMediaFlags()).embedLinks,
     pushEnabled: PUSH_ENABLED,
   });
 }));
@@ -2716,13 +2819,19 @@ app.post('/api/admin/settings', requirePerm('settings'), wrap(async (req, res) =
     hallVisible: 'hall_visible',
     notifyPrize: 'notify_prize',
     lockVotes: 'lock_votes',
+    chatEnabled: 'chat_enabled',
+    chatImages: 'chat_images',
+    chatVideos: 'chat_videos',
+    chatEmbedLinks: 'chat_embed_links',
   };
   for (const [field, key] of Object.entries(flagFields)) {
     const v = req.body?.[field];
     if (v === undefined) continue;
     if (typeof v !== 'boolean') return res.status(400).json({ error: 'Valor inválido.' });
     entries.push([key, v ? '1' : '0']);
-    if (field === 'hallVisible' || field === 'lockVotes') rankingChanged = true; // avisa as páginas abertas
+    // hall/trava/chat: avisa as páginas abertas para esconder botão, trava, etc.
+    if (field === 'hallVisible' || field === 'lockVotes' || field === 'chatEnabled'
+      || field === 'chatImages' || field === 'chatVideos' || field === 'chatEmbedLinks') rankingChanged = true;
   }
 
   if (mode !== undefined) {
@@ -2834,6 +2943,293 @@ app.get('/api/admin/backup', requirePerm('backup'), wrap(async (req, res) => {
     votes: votes.rows,
     awards: awards.rows,
     settings: settings.rows,
+  });
+}));
+
+
+/* ---------- Chat global ---------- */
+const CHAT_MAX_BODY = 500;
+const CHAT_HISTORY = 100;
+
+function chatMessageView(row, canModerate) {
+  const deleted = Boolean(row.deleted_at);
+  const mediaUrl = row.media_url || null;
+  const mediaType = row.media_type || null;
+  return {
+    id: Number(row.id),
+    body: deleted && !canModerate ? null : row.body,
+    deleted,
+    createdAt: iso(row.created_at),
+    media: (!deleted || canModerate) && mediaUrl && mediaType
+      ? { url: mediaUrl, type: mediaType }
+      : null,
+    user: {
+      id: row.user_id,
+      name: row.display_name,
+      login: row.login,
+      avatar: row.avatar_url,
+      nameColor: normalizeNameColor(row.name_color),
+    },
+  };
+}
+
+async function getActiveMute(userId) {
+  const { rows } = await q(
+    `select user_id, reason, until, created_at
+     from chat_mutes
+     where user_id = $1 and (until is null or until > now())`,
+    [userId]
+  );
+  return rows[0] || null;
+}
+
+async function canModerateChat(req) {
+  const admin = await getAdmin(req);
+  return Boolean(admin && (admin.owner || admin.perms.has('chat')));
+}
+
+app.get('/api/chat', requireUser, wrap(async (req, res) => {
+  if (!(await getChatEnabled())) {
+    return res.status(503).json({ error: 'O chat está desativado no momento.', chatEnabled: false });
+  }
+  const canMod = await canModerateChat(req);
+  const mute = await getActiveMute(req.user.id);
+  const mediaFlags = await getChatMediaFlags();
+  const { rows } = await q(
+    `select m.id, m.user_id, m.body, m.created_at, m.deleted_at, m.media_url, m.media_type,
+            u.display_name, u.login, u.avatar_url, u.name_color
+     from (
+       select id from chat_messages
+       order by id desc
+       limit $1
+     ) last
+     join chat_messages m on m.id = last.id
+     join users u on u.id = m.user_id
+     order by m.id asc`,
+    [CHAT_HISTORY]
+  );
+  const visible = canMod ? rows : rows.filter((r) => !r.deleted_at);
+  res.json({
+    messages: visible.map((r) => chatMessageView(r, canMod)),
+    canModerate: canMod,
+    media: mediaFlags,
+    muted: mute
+      ? {
+          reason: mute.reason || null,
+          until: mute.until ? iso(mute.until) : null,
+          permanent: !mute.until,
+        }
+      : null,
+  });
+}));
+
+app.post('/api/chat', requireUser, limit('chat', 30, 60 * 1000), wrap(async (req, res) => {
+  if (!(await getChatEnabled())) {
+    return res.status(503).json({ error: 'O chat está desativado no momento.', chatEnabled: false });
+  }
+  const mute = await getActiveMute(req.user.id);
+  if (mute) {
+    const when = mute.until
+      ? `até ${new Date(mute.until).toLocaleString('pt-BR')}`
+      : 'permanentemente';
+    return res.status(403).json({
+      error: `Você está silenciado no chat ${when}.${mute.reason ? ' Motivo: ' + mute.reason : ''}`,
+    });
+  }
+  const body = String(req.body?.body || '').trim().replace(/\s+/g, ' ');
+  if (body.length > CHAT_MAX_BODY) {
+    return res.status(400).json({ error: `Mensagem muito longa (máx. ${CHAT_MAX_BODY} caracteres).` });
+  }
+  const mediaFlags = await getChatMediaFlags();
+  let mediaUrl = null;
+  let mediaType = null;
+  const mediaRaw = req.body?.mediaUrl;
+  const mediaTypeRaw = String(req.body?.mediaType || '').toLowerCase();
+  if (mediaRaw) {
+    const parsed = parseChatMediaUrl(mediaRaw);
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
+    mediaType = mediaTypeRaw === 'image' || mediaTypeRaw === 'video'
+      ? mediaTypeRaw
+      : guessMediaType(parsed.url);
+    if (mediaType !== 'image' && mediaType !== 'video') {
+      return res.status(400).json({ error: 'Tipo de mídia inválido. Use image ou video.' });
+    }
+    if (mediaType === 'image' && !mediaFlags.images) {
+      return res.status(403).json({ error: 'Anexos de imagem estão desativados.' });
+    }
+    if (mediaType === 'video' && !mediaFlags.videos) {
+      return res.status(403).json({ error: 'Anexos de vídeo estão desativados.' });
+    }
+    mediaUrl = parsed.url;
+  }
+  if (!body && !mediaUrl) return res.status(400).json({ error: 'Mensagem vazia.' });
+  const { rows } = await q(
+    `insert into chat_messages (user_id, body, media_url, media_type)
+     values ($1, $2, $3, $4)
+     returning id, user_id, body, created_at, deleted_at, media_url, media_type`,
+    [req.user.id, body || '', mediaUrl, mediaType]
+  );
+  const row = {
+    ...rows[0],
+    display_name: req.user.display_name,
+    login: req.user.login,
+    avatar_url: req.user.avatar_url,
+    name_color: req.user.name_color,
+  };
+  const msg = chatMessageView(row, false);
+  broadcastChat({ type: 'message', message: msg });
+  res.status(201).json({ message: msg });
+}));
+
+app.delete('/api/admin/chat/:id', requirePerm('chat'), wrap(async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id) || id < 1) return res.status(400).json({ error: 'ID inválido.' });
+  const { rows } = await q(
+    `update chat_messages
+     set deleted_at = now(), deleted_by = $2
+     where id = $1 and deleted_at is null
+     returning id`,
+    [id, req.admin.id || 'owner']
+  );
+  if (!rows[0]) return res.status(404).json({ error: 'Mensagem não encontrada ou já apagada.' });
+  broadcastChat({ type: 'delete', id });
+  res.json({ ok: true });
+}));
+
+// Remove permanentemente do banco (uma mensagem)
+app.delete('/api/admin/chat/:id/purge', requirePerm('chat'), wrap(async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id) || id < 1) return res.status(400).json({ error: 'ID inválido.' });
+  const { rowCount } = await q('delete from chat_messages where id = $1', [id]);
+  if (!rowCount) return res.status(404).json({ error: 'Mensagem não encontrada.' });
+  broadcastChat({ type: 'purge', id });
+  res.json({ ok: true });
+}));
+
+// Remove do banco todas as mensagens já marcadas como apagadas
+app.post('/api/admin/chat/purge-deleted', requirePerm('chat'), wrap(async (req, res) => {
+  const { rowCount } = await q('delete from chat_messages where deleted_at is not null');
+  broadcastChat({ type: 'purge_deleted' });
+  res.json({ ok: true, removed: rowCount });
+}));
+
+// Busca de usuários para menção (@login) no chat
+app.get('/api/chat/users', requireUser, wrap(async (req, res) => {
+  if (!(await getChatEnabled())) {
+    return res.status(503).json({ error: 'O chat está desativado no momento.', chatEnabled: false });
+  }
+  const qtext = String(req.query.q || '').trim().toLowerCase().slice(0, 40);
+  if (!qtext) return res.json({ users: [] });
+  const { rows } = await q(
+    `select id, display_name, login, avatar_url
+     from users
+     where not banned and not is_house and not coalesce(is_test, false)
+       and (lower(login) like $1 or lower(display_name) like $1)
+     order by
+       case when lower(login) like $2 then 0 else 1 end,
+       lower(display_name)
+     limit 8`,
+    [`%${qtext}%`, `${qtext}%`]
+  );
+  res.json({
+    users: rows.map((r) => ({
+      id: r.id,
+      name: r.display_name,
+      login: r.login,
+      avatar: r.avatar_url,
+    })),
+  });
+}));
+
+app.post('/api/admin/chat/mute', requirePerm('chat'), wrap(async (req, res) => {
+  const userId = String(req.body?.userId || '').trim();
+  if (!userId) return res.status(400).json({ error: 'Informe o usuário.' });
+  const duration = String(req.body?.duration || 'permanent');
+  const reason = String(req.body?.reason || '').trim().slice(0, 200) || null;
+  let until = null;
+  if (duration === '1h') until = new Date(Date.now() + 60 * 60 * 1000);
+  else if (duration === '24h') until = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  else if (duration !== 'permanent') {
+    return res.status(400).json({ error: 'Duração inválida (use 1h, 24h ou permanent).' });
+  }
+  const u = await q('select id, display_name from users where id = $1', [userId]);
+  if (!u.rows[0]) return res.status(404).json({ error: 'Usuário não encontrado.' });
+  await q(
+    `insert into chat_mutes (user_id, muted_by, reason, until)
+     values ($1, $2, $3, $4)
+     on conflict (user_id) do update set
+       muted_by = excluded.muted_by,
+       reason = excluded.reason,
+       until = excluded.until,
+       created_at = now()`,
+    [userId, req.admin.id || 'owner', reason, until]
+  );
+  broadcastChat({ type: 'mute', userId });
+  res.json({
+    ok: true,
+    user: u.rows[0].display_name,
+    until: until ? iso(until) : null,
+    permanent: !until,
+  });
+}));
+
+app.delete('/api/admin/chat/mute/:userId', requirePerm('chat'), wrap(async (req, res) => {
+  const { rowCount } = await q('delete from chat_mutes where user_id = $1', [req.params.userId]);
+  if (!rowCount) return res.status(404).json({ error: 'Este usuário não está silenciado.' });
+  broadcastChat({ type: 'unmute', userId: req.params.userId });
+  res.json({ ok: true });
+}));
+
+app.get('/api/admin/chat/mutes', requirePerm('chat'), wrap(async (req, res) => {
+  const { rows } = await q(
+    `select m.user_id, m.reason, m.until, m.created_at,
+            u.display_name, u.login, u.avatar_url
+     from chat_mutes m
+     join users u on u.id = m.user_id
+     where m.until is null or m.until > now()
+     order by m.created_at desc`
+  );
+  res.json({
+    mutes: rows.map((r) => ({
+      userId: r.user_id,
+      name: r.display_name,
+      login: r.login,
+      avatar: r.avatar_url,
+      reason: r.reason,
+      until: r.until ? iso(r.until) : null,
+      permanent: !r.until,
+      createdAt: iso(r.created_at),
+    })),
+  });
+}));
+
+// Últimas mensagens do chat (incluindo apagadas) para moderação no painel
+app.get('/api/admin/chat/messages', requirePerm('chat'), wrap(async (req, res) => {
+  const { rows } = await q(
+    `select m.id, m.user_id, m.body, m.created_at, m.deleted_at, m.media_url, m.media_type,
+            u.display_name, u.login, u.avatar_url
+     from (
+       select id from chat_messages order by id desc limit $1
+     ) last
+     join chat_messages m on m.id = last.id
+     join users u on u.id = m.user_id
+     order by m.id desc`,
+    [CHAT_HISTORY]
+  );
+  res.json({
+    messages: rows.map((r) => ({
+      id: Number(r.id),
+      body: r.body,
+      deleted: Boolean(r.deleted_at),
+      createdAt: iso(r.created_at),
+      media: r.media_url && r.media_type ? { url: r.media_url, type: r.media_type } : null,
+      user: {
+        id: r.user_id,
+        name: r.display_name,
+        login: r.login,
+        avatar: r.avatar_url,
+      },
+    })),
   });
 }));
 

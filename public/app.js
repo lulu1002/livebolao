@@ -21,6 +21,18 @@
     profileId: null,
     profile: null,
     profileError: null,
+    // chat
+    chatOpen: false,
+    chatMessages: [],
+    chatCanModerate: false,
+    chatMuted: null,
+    chatLoaded: false,
+    chatUnread: 0,
+    chatSending: false,
+    chatEnabled: true,
+    chatMedia: { images: true, videos: true, embedLinks: true },
+    chatAttach: null, // { url, type }
+    nameColors: [],
   };
 
   /* ---------- Utilidades ---------- */
@@ -31,6 +43,7 @@
       if (v == null || v === false) continue;
       if (k === 'class') el.className = v;
       else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+      else if (k === 'style') el.style.cssText = v; // via CSSOM: a CSP não deixa o atributo style
       else el.setAttribute(k, v === true ? '' : v);
     }
     for (const c of children.flat()) {
@@ -201,26 +214,113 @@
     return h('span', { class: `${cls} ph`, 'aria-hidden': 'true' }, (name || '?').slice(0, 1).toUpperCase());
   }
 
+
+  function nameColorStyle(color) {
+    return color ? { style: `color: ${color}` } : {};
+  }
+
   /* ---------- Cabeçalho ---------- */
   function renderWho() {
     const box = $('#who');
     box.replaceChildren();
     if (state.user) {
+      const color = state.user.nameColor || null;
+      const nameAttrs = { class: 'me-name', href: `#perfil/${state.user.id}` };
+      if (color) nameAttrs.style = `color: ${color}`;
       box.append(
         avatarEl(state.user.name, state.user.avatar),
-        h('a', { class: 'me-name', href: `#perfil/${state.user.id}` }, state.user.name),
+        h('a', nameAttrs, state.user.name),
         h('button', { class: 'btn ghost small', type: 'button', onclick: logout }, 'Sair')
       );
     } else {
       box.append(h('a', { class: 'btn twitch small', href: '/auth/twitch' }, 'Entrar com a Twitch'));
     }
+    if (typeof updateChatFab === 'function') updateChatFab();
+    if (typeof updateIdentityFab === 'function') updateIdentityFab();
   }
+
+  function renderIdentityMenu() {
+    const box = $('#identity-swatches');
+    const menu = $('#identity-menu');
+    if (!box || !menu) return;
+    const color = state.user?.nameColor || null;
+    const colors = state.nameColors.length ? state.nameColors : [{ id: 'default', label: 'Padrão', value: null }];
+    box.replaceChildren(...colors.map((c) => {
+      const selected = (color || null) === (c.value || null);
+      const attrs = {
+        class: `identity-swatch${selected ? ' selected' : ''}`,
+        type: 'button',
+        title: c.label,
+        'data-color': c.id,
+        'aria-label': c.label,
+        onclick: (e) => {
+          e.stopPropagation();
+          setNameColor(c.value);
+        },
+      };
+      if (c.value) attrs.style = `background: ${c.value}`;
+      return h('button', attrs);
+    }));
+  }
+
+  function updateIdentityFab() {
+    const btn = $('#identity-toggle');
+    if (!btn) return;
+    btn.hidden = !state.user;
+    if (!state.user) {
+      const menu = $('#identity-menu');
+      if (menu) menu.hidden = true;
+    } else {
+      renderIdentityMenu();
+    }
+  }
+
+  function setupIdentityFab() {
+    const btn = $('#identity-toggle');
+    if (!btn) return;
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!state.user) return;
+      const menu = $('#identity-menu');
+      if (!menu) return;
+      renderIdentityMenu();
+      menu.hidden = !menu.hidden;
+    });
+  }
+
+
+  async function setNameColor(value) {
+    try {
+      const data = await api('/api/me/name-color', {
+        method: 'POST',
+        body: { color: value == null ? 'default' : value },
+      });
+      if (data.user) state.user = data.user;
+      const menu = $('#identity-menu');
+      if (menu) menu.hidden = true;
+      renderWho();
+      updateIdentityFab();
+      if (state.chatOpen) renderChatMessages(false);
+      if (state.view === 'ranking') loadRanking();
+      toast('Cor do nome atualizada');
+    } catch (e) {
+      toast(e.message || 'Não foi possível salvar a cor.', true);
+    }
+  }
+
 
   async function logout() {
     try { await api('/api/logout', { method: 'POST' }); } catch (_) { /* segue */ }
     state.user = null;
+    state.chatMessages = [];
+    state.chatLoaded = false;
+    state.chatCanModerate = false;
+    state.chatMuted = null;
+    state.chatUnread = 0;
     syncPushUser();
     renderWho();
+    if (typeof setChatOpen === 'function') setChatOpen(false);
+    if (typeof updateChatBadge === 'function') updateChatBadge();
     refresh();
   }
 
@@ -232,6 +332,18 @@
       state.topics = data.topics || [];
       state.lockVotes = Boolean(data.lockVotes);
       state.balance = data.balance == null ? null : data.balance;
+      if (data.chatEnabled !== undefined) {
+        state.chatEnabled = Boolean(data.chatEnabled);
+        updateChatFab();
+      }
+      if (data.chatMedia) {
+        state.chatMedia = {
+          images: data.chatMedia.images !== false,
+          videos: data.chatMedia.videos !== false,
+          embedLinks: data.chatMedia.embedLinks !== false,
+        };
+        updateChatAttachUi();
+      }
       state.pollsError = null;
     } catch (e) {
       state.pollsError = e.message;
@@ -610,7 +722,7 @@
             avatarEl(p.name, p.avatar, '', p.isHouse),
             h('span', {},
               h('span', { class: 'nm-row' },
-                h('a', { class: 'nm', href: `#perfil/${p.userId}` }, p.name + (me ? ' (você)' : ''))),
+                h('a', { class: 'nm', href: `#perfil/${p.userId}`, ...(p.nameColor ? { style: `color: ${p.nameColor}` } : {}) }, p.name + (me ? ' (você)' : ''))),
               h('span', { class: 'hits' }, `${p.hits} ${p.hits === 1 ? 'acerto' : 'acertos'} na semana`)),
             h('span', { class: 'score' }, h('b', {}, p.points), ' pts'));
         })));
@@ -652,7 +764,7 @@
         avatarEl(s.name, s.avatar, '', s.isHouse),
         h('span', {},
           h('span', { class: 'nm-row' },
-            h('a', { class: 'nm', href: `#perfil/${s.userId}` }, (s.isHouse ? ' ' : '') + s.name + (me ? ' (você)' : '')),
+            h('a', { class: 'nm', href: `#perfil/${s.userId}`, ...(s.nameColor ? { style: `color: ${s.nameColor}` } : {}) }, (s.isHouse ? ' ' : '') + s.name + (me ? ' (você)' : '')),
             badgesEl(s.badges, s.prizes)),
           h('span', { class: 'hits' }, s.isHouse ? 'Conta da casa' : hits)),
         h('span', { class: 'score' }, h('b', {}, s.points), ' pts'));
@@ -709,7 +821,7 @@
       h('div', { class: 'profile-head' },
         avatarEl(p.name, p.avatar, 'big', p.isHouse),
         h('div', {},
-          h('h2', {}, (p.isHouse ? '🏠 ' : '') + p.name + (me ? ' (você)' : '')),
+          h('h2', { ...(p.nameColor ? { style: `color: ${p.nameColor}` } : {}) }, (p.isHouse ? '🏠 ' : '') + p.name + (me ? ' (você)' : '')),
           p.isHouse
             ? h('span', { class: 'hits' }, 'Conta da casa — entra quando nenhuma opção bate')
             : h('a', { class: 'linkish', href: `https://www.twitch.tv/${encodeURIComponent(p.login)}`, target: '_blank', rel: 'noopener noreferrer' }, 'Canal na Twitch'))),
@@ -836,12 +948,21 @@
     const es = new EventSource('/api/events');
     let opened = false;
     es.addEventListener('open', () => {
-      if (opened) refresh(); // reconectou: pode ter perdido algo
+      if (opened) {
+        refresh(); // reconectou: pode ter perdido algo
+        if (state.user) loadChat(true);
+      }
       opened = true;
     });
     es.addEventListener('update', () => {
       // pequeno atraso aleatório para não sobrecarregar o servidor
       setTimeout(refresh, Math.random() * 400);
+    });
+    es.addEventListener('chat', (ev) => {
+      try {
+        const data = JSON.parse(ev.data);
+        handleChatEvent(data);
+      } catch (_) { /* ignore */ }
     });
   }
 
@@ -857,6 +978,612 @@
     history.replaceState(null, '', location.pathname + location.hash);
   }
 
+
+  /* ---------- Chat global (sidebar) ---------- */
+  function fmtChatTime(isoStr) {
+    if (!isoStr) return '';
+    const d = new Date(isoStr);
+    if (Number.isNaN(d.getTime())) return '';
+    return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function chatInitials(name) {
+    const p = String(name || '?').trim().split(/\s+/);
+    return ((p[0]?.[0] || '?') + (p[1]?.[0] || '')).toUpperCase();
+  }
+
+  function isNearBottom(el, px = 80) {
+    return el.scrollHeight - el.scrollTop - el.clientHeight < px;
+  }
+
+  function setChatOpen(open) {
+    state.chatOpen = open;
+    const side = $('#chat-sidebar');
+    const back = $('#chat-backdrop');
+    const fab = $('#chat-toggle');
+    if (!side || !fab) return;
+    side.hidden = !open;
+    if (back) back.hidden = !open;
+    fab.setAttribute('aria-expanded', String(open));
+    if (open) {
+      state.chatUnread = 0;
+      updateChatBadge();
+      renderChatMessages(true);
+      const input = $('#chat-input');
+      if (input && !input.disabled) setTimeout(() => input.focus(), 50);
+    }
+  }
+
+  function updateChatBadge() {
+    const badge = $('#chat-badge');
+    if (!badge) return;
+    const n = state.chatUnread;
+    if (n > 0) {
+      badge.hidden = false;
+      badge.textContent = n > 99 ? '99+' : String(n);
+    } else {
+      badge.hidden = true;
+    }
+  }
+
+  function updateChatFab() {
+    const fab = $('#chat-toggle');
+    if (!fab) return;
+    const show = Boolean(state.user && state.chatEnabled);
+    fab.hidden = !show;
+    if (!show) setChatOpen(false);
+  }
+
+  function updateChatForm() {
+    const form = $('#chat-form');
+    const mutedBox = $('#chat-muted');
+    const input = $('#chat-input');
+    const btn = form?.querySelector('button[type=submit]');
+    const attachBar = $('#chat-attach-bar');
+    if (!form || !input) return;
+    const muted = state.chatMuted;
+    if (muted) {
+      form.hidden = true;
+      if (attachBar) attachBar.hidden = true;
+      if (mutedBox) {
+        mutedBox.hidden = false;
+        const until = muted.permanent
+          ? 'permanentemente'
+          : muted.until
+            ? `até ${new Date(muted.until).toLocaleString('pt-BR')}`
+            : '';
+        mutedBox.textContent = `Você está silenciado ${until}.${muted.reason ? ' Motivo: ' + muted.reason : ''}`;
+      }
+    } else {
+      form.hidden = false;
+      if (mutedBox) mutedBox.hidden = true;
+      input.disabled = state.chatSending;
+      if (btn) btn.disabled = state.chatSending;
+      if (attachBar && state.chatAttach) attachBar.hidden = false;
+    }
+    if (typeof updateChatAttachUi === 'function') updateChatAttachUi();
+  }
+
+  function renderChatMessages(forceScroll) {
+    const box = $('#chat-messages');
+    if (!box) return;
+    const stick = forceScroll || isNearBottom(box);
+    const msgs = state.chatMessages;
+    if (!msgs.length) {
+      box.replaceChildren(h('p', { class: 'chat-empty' }, 'Nenhuma mensagem ainda. Seja o primeiro!'));
+      return;
+    }
+    const meId = state.user?.id;
+    box.replaceChildren(...msgs.map((m) => {
+      const mine = meId && m.user?.id === meId;
+      const av = m.user?.avatar
+        ? h('img', { class: 'av', src: m.user.avatar, alt: '', width: 34, height: 34 })
+        : h('div', { class: 'av ph' }, chatInitials(m.user?.name));
+      const body = m.deleted
+        ? h('div', { class: 'text' }, 'Mensagem removida pela moderação')
+        : renderChatText(m.body || '');
+      const media = (!m.deleted && m.media && m.media.url) ? renderChatMedia(m.media) : null;
+      const mod = [];
+      if (state.chatCanModerate && !m.deleted) {
+        mod.push(
+          h('div', { class: 'mod' },
+            h('button', { type: 'button', class: 'danger', onclick: () => deleteChatMessage(m.id) }, 'Apagar'),
+            m.user?.id && m.user.id !== meId
+              ? h('button', { type: 'button', onclick: () => openMuteDialog(m.user) }, 'Silenciar')
+              : null
+          )
+        );
+      }
+      return h('div', { class: `chat-msg${mine ? ' mine' : ''}${m.deleted ? ' deleted' : ''}` },
+        av,
+        h('div', { class: 'bubble' },
+          h('div', { class: 'meta' },
+            h('span', {
+              class: 'name',
+              ...(m.user?.nameColor ? { style: `color: ${m.user.nameColor}` } : {}),
+            }, m.user?.name || 'Alguém'),
+            h('span', { class: 'time' }, fmtChatTime(m.createdAt))
+          ),
+          body,
+          media,
+          ...mod
+        )
+      );
+    }));
+    if (stick) box.scrollTop = box.scrollHeight;
+  }
+
+  async function loadChat(silent) {
+    if (!state.user || !state.chatEnabled) return;
+    try {
+      const data = await api('/api/chat');
+      state.chatMessages = data.messages || [];
+      state.chatCanModerate = Boolean(data.canModerate);
+      state.chatMuted = data.muted || null;
+      if (data.media) {
+        state.chatMedia = {
+          images: data.media.images !== false,
+          videos: data.media.videos !== false,
+          embedLinks: data.media.embedLinks !== false,
+        };
+      }
+      state.chatLoaded = true;
+      updateChatForm();
+      updateChatAttachUi();
+      if (state.chatOpen) renderChatMessages(true);
+    } catch (e) {
+      // chat desligado no servidor
+      if (String(e.message || '').includes('desativado')) {
+        state.chatEnabled = false;
+        updateChatFab();
+        return;
+      }
+      if (!silent) toast(e.message || 'Não foi possível carregar o chat.', true);
+    }
+  }
+
+  function handleChatEvent(data) {
+    if (!data || !state.user) return;
+    if (data.type === 'message' && data.message) {
+      const msg = data.message;
+      if (state.chatMessages.some((m) => m.id === msg.id)) return;
+      state.chatMessages.push(msg);
+      // mantém só as últimas 100
+      if (state.chatMessages.length > 100) {
+        state.chatMessages = state.chatMessages.slice(-100);
+      }
+      if (state.chatOpen) {
+        renderChatMessages(false);
+      } else if (msg.user?.id !== state.user.id) {
+        state.chatUnread += 1;
+        updateChatBadge();
+      }
+    } else if (data.type === 'delete' && data.id != null) {
+      if (state.chatCanModerate) {
+        const m = state.chatMessages.find((x) => x.id === data.id);
+        if (m) {
+          m.deleted = true;
+          m.body = null;
+          m.media = null;
+          if (state.chatOpen) renderChatMessages(false);
+        }
+      } else {
+        state.chatMessages = state.chatMessages.filter((x) => x.id !== data.id);
+        if (state.chatOpen) renderChatMessages(false);
+      }
+    } else if (data.type === 'purge' && data.id != null) {
+      state.chatMessages = state.chatMessages.filter((x) => x.id !== data.id);
+      if (state.chatOpen) renderChatMessages(false);
+    } else if (data.type === 'purge_deleted') {
+      state.chatMessages = state.chatMessages.filter((x) => !x.deleted);
+      if (state.chatOpen) renderChatMessages(false);
+    } else if (data.type === 'mute' || data.type === 'unmute') {
+      // atualiza status de mute do usuário atual
+      loadChat(true);
+    }
+  }
+
+  async function sendChatMessage(ev) {
+    ev.preventDefault();
+    if (!state.user || state.chatSending || state.chatMuted) return;
+    const input = $('#chat-input');
+    const body = (input?.value || '').trim();
+    const attach = state.chatAttach;
+    if (!body && !attach) return;
+    state.chatSending = true;
+    updateChatForm();
+    try {
+      const payload = { body };
+      if (attach) {
+        payload.mediaUrl = attach.url;
+        payload.mediaType = attach.type;
+      }
+      const data = await api('/api/chat', { method: 'POST', body: payload });
+      if (input) input.value = '';
+      clearChatAttach();
+      if (data.message && !state.chatMessages.some((m) => m.id === data.message.id)) {
+        state.chatMessages.push(data.message);
+        if (state.chatMessages.length > 100) state.chatMessages = state.chatMessages.slice(-100);
+        renderChatMessages(true);
+      } else {
+        renderChatMessages(true);
+      }
+    } catch (e) {
+      toast(e.message || 'Não foi possível enviar.', true);
+      if (String(e.message || '').includes('silenciado')) loadChat(true);
+    } finally {
+      state.chatSending = false;
+      updateChatForm();
+      input?.focus();
+    }
+  }
+
+  async function deleteChatMessage(id) {
+    if (!state.chatCanModerate) return;
+    if (!confirm('Apagar esta mensagem?')) return;
+    try {
+      await api(`/api/admin/chat/${id}`, { method: 'DELETE' });
+      const m = state.chatMessages.find((x) => x.id === id);
+      if (m) {
+        m.deleted = true;
+        m.body = null;
+        renderChatMessages(false);
+      }
+    } catch (e) {
+      toast(e.message || 'Não foi possível apagar.', true);
+    }
+  }
+
+  function openMuteDialog(user) {
+    if (!user?.id || !state.chatCanModerate) return;
+    const existing = document.querySelector('.chat-mute-pop');
+    if (existing) existing.remove();
+
+    const sel = h('select', { id: 'mute-duration' },
+      h('option', { value: '1h' }, '1 hora'),
+      h('option', { value: '24h' }, '24 horas'),
+      h('option', { value: 'permanent', selected: true }, 'Permanente')
+    );
+    const reason = h('input', { id: 'mute-reason', type: 'text', maxlength: '200', placeholder: 'Opcional' });
+
+    const pop = h('div', { class: 'chat-mute-pop', role: 'dialog', 'aria-label': 'Silenciar usuário' },
+      h('div', { class: 'chat-mute-card' },
+        h('h3', {}, `Silenciar ${user.name || 'usuário'}?`),
+        h('label', {}, 'Duração', sel),
+        h('label', {}, 'Motivo', reason),
+        h('div', { class: 'chat-mute-actions' },
+          h('button', { type: 'button', onclick: () => pop.remove() }, 'Cancelar'),
+          h('button', {
+            type: 'button',
+            class: 'primary',
+            onclick: async () => {
+              try {
+                await api('/api/admin/chat/mute', {
+                  method: 'POST',
+                  body: {
+                    userId: user.id,
+                    duration: sel.value,
+                    reason: reason.value.trim() || undefined,
+                  },
+                });
+                toast(`${user.name} foi silenciado.`);
+                pop.remove();
+              } catch (e) {
+                toast(e.message || 'Falha ao silenciar.', true);
+              }
+            },
+          }, 'Silenciar')
+        )
+      )
+    );
+    // fecha ao clicar fora do card
+    pop.addEventListener('click', (e) => { if (e.target === pop) pop.remove(); });
+    document.body.append(pop);
+  }
+
+
+  function isImageLink(url) {
+    try {
+      const u = new URL(url);
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+      return /\.(png|jpe?g|gif|webp|avif)(\?.*)?$/i.test(u.pathname);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function appendTextWithMentions(wrap, text) {
+    // @login (letras, números, _)
+    const re = /(^|[^\w])@([A-Za-z0-9_]{2,25})/g;
+    let last = 0;
+    let m;
+    while ((m = re.exec(text))) {
+      const start = m.index + m[1].length;
+      if (start > last) wrap.append(document.createTextNode(text.slice(last, start)));
+      const login = m[2];
+      wrap.append(h('span', {
+        class: 'chat-mention',
+        title: `@${login}`,
+        onclick: (e) => {
+          e.preventDefault();
+          // tenta abrir perfil se já conhecemos o usuário na conversa
+          const known = state.chatMessages.find((msg) => msg.user?.login?.toLowerCase() === login.toLowerCase());
+          if (known?.user?.id) navigate(`#perfil/${known.user.id}`);
+        },
+      }, `@${login}`));
+      last = start + 1 + login.length;
+    }
+    if (last < text.length) wrap.append(document.createTextNode(text.slice(last)));
+  }
+
+  function renderChatText(text) {
+    const wrap = h('div', { class: 'text' });
+    if (!text) return wrap;
+    const embed = state.chatMedia?.embedLinks !== false;
+    // Quebra por URLs http(s); no trecho entre URLs, destaca @menções
+    const re = /(https?:\/\/[^\s<]+)/g;
+    let last = 0;
+    let m;
+    while ((m = re.exec(text))) {
+      if (m.index > last) appendTextWithMentions(wrap, text.slice(last, m.index));
+      const url = m[1].replace(/[.,);]+$/, '');
+      const trailing = m[1].slice(url.length);
+      if (embed && isImageLink(url)) {
+        wrap.append(
+          h('a', { class: 'chat-link', href: url, target: '_blank', rel: 'noopener noreferrer' }, url),
+          h('a', { href: url, target: '_blank', rel: 'noopener noreferrer' },
+            h('img', { class: 'embed-img', src: url, alt: 'imagem', loading: 'lazy', referrerpolicy: 'no-referrer' })
+          )
+        );
+      } else {
+        wrap.append(h('a', { class: 'chat-link', href: url, target: '_blank', rel: 'noopener noreferrer' }, url));
+      }
+      if (trailing) wrap.append(document.createTextNode(trailing));
+      last = m.index + m[1].length;
+    }
+    if (last < text.length) appendTextWithMentions(wrap, text.slice(last));
+    return wrap;
+  }
+
+  function renderChatMedia(media) {
+    if (!media?.url) return null;
+    if (media.type === 'video') {
+      return h('div', { class: 'media' },
+        h('video', { src: media.url, controls: true, preload: 'metadata', playsinline: true })
+      );
+    }
+    return h('div', { class: 'media' },
+      h('a', { href: media.url, target: '_blank', rel: 'noopener noreferrer' },
+        h('img', { src: media.url, alt: 'anexo', loading: 'lazy', referrerpolicy: 'no-referrer' })
+      )
+    );
+  }
+
+  function guessAttachType(url) {
+    try {
+      const path = new URL(url).pathname.toLowerCase();
+      if (/\.(png|jpe?g|gif|webp|avif)$/i.test(path)) return 'image';
+      if (/\.(mp4|webm|ogg|mov)$/i.test(path)) return 'video';
+    } catch (_) { /* ignore */ }
+    return null;
+  }
+
+  function clearChatAttach() {
+    state.chatAttach = null;
+    const bar = $('#chat-attach-bar');
+    const prev = $('#chat-attach-preview');
+    if (bar) bar.hidden = true;
+    if (prev) prev.replaceChildren();
+  }
+
+  function setChatAttach(url, type) {
+    state.chatAttach = { url, type };
+    const bar = $('#chat-attach-bar');
+    const prev = $('#chat-attach-preview');
+    if (!bar || !prev) return;
+    bar.hidden = false;
+    prev.replaceChildren();
+    if (type === 'video') {
+      prev.append(h('video', { src: url, preload: 'metadata' }), document.createTextNode(url));
+    } else {
+      prev.append(h('img', { src: url, alt: '' }), document.createTextNode(url));
+    }
+  }
+
+  function updateChatAttachUi() {
+    const btn = $('#chat-attach-btn');
+    if (!btn) return;
+    const allow = Boolean(state.chatMedia?.images || state.chatMedia?.videos);
+    btn.hidden = !allow || !state.user || !state.chatEnabled || Boolean(state.chatMuted);
+    if (!allow) clearChatAttach();
+  }
+
+  function promptChatAttach() {
+    const allowImg = state.chatMedia?.images !== false;
+    const allowVid = state.chatMedia?.videos !== false;
+    if (!allowImg && !allowVid) {
+      toast('Anexos de mídia estão desativados.', true);
+      return;
+    }
+    const hint = [
+      allowImg ? 'imagem (png, jpg…)' : null,
+      allowVid ? 'vídeo (mp4, webm…)' : null,
+    ].filter(Boolean).join(' ou ');
+    const url = prompt(`Cole o link da ${hint}:`);
+    if (url == null) return;
+    const trimmed = url.trim();
+    if (!trimmed) return;
+    let type = guessAttachType(trimmed);
+    if (!type) {
+      // pergunta ao usuário
+      if (allowImg && allowVid) {
+        const t = prompt('É imagem ou vídeo? (image / video)', 'image');
+        if (t == null) return;
+        type = String(t).toLowerCase().startsWith('v') ? 'video' : 'image';
+      } else {
+        type = allowVid ? 'video' : 'image';
+      }
+    }
+    if (type === 'image' && !allowImg) {
+      toast('Anexos de imagem estão desativados.', true);
+      return;
+    }
+    if (type === 'video' && !allowVid) {
+      toast('Anexos de vídeo estão desativados.', true);
+      return;
+    }
+    try {
+      const u = new URL(trimmed);
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('bad');
+    } catch (_) {
+      toast('URL inválida. Use um link http ou https.', true);
+      return;
+    }
+    setChatAttach(trimmed, type);
+  }
+
+
+  /* Menções (@login) */
+  const mentionState = { open: false, items: [], index: 0, start: -1, query: '' };
+  let mentionTimer = null;
+
+  function hideMentions() {
+    mentionState.open = false;
+    mentionState.items = [];
+    mentionState.index = 0;
+    const box = $('#chat-suggest');
+    if (box) {
+      box.hidden = true;
+      box.replaceChildren();
+    }
+  }
+
+  function renderMentionSuggest() {
+    const box = $('#chat-suggest');
+    if (!box) return;
+    if (!mentionState.open || !mentionState.items.length) {
+      box.hidden = true;
+      box.replaceChildren();
+      return;
+    }
+    box.hidden = false;
+    box.replaceChildren(...mentionState.items.map((u, i) => {
+      const av = u.avatar
+        ? h('img', { class: 'av', src: u.avatar, alt: '' })
+        : h('span', { class: 'av ph', style: 'display:grid;place-items:center;font-size:0.7rem;font-weight:800;border:1px solid var(--line);border-radius:999px;width:1.6rem;height:1.6rem' }, (u.name || '?')[0]);
+      return h('button', {
+        type: 'button',
+        role: 'option',
+        'aria-selected': String(i === mentionState.index),
+        onclick: () => applyMention(u),
+      }, av, h('span', {}, `${u.name} `, h('small', { class: 'hint' }, `@${u.login}`)));
+    }));
+  }
+
+  function applyMention(u) {
+    const input = $('#chat-input');
+    if (!input || mentionState.start < 0) return;
+    const val = input.value;
+    const before = val.slice(0, mentionState.start);
+    const afterCursor = val.slice(input.selectionStart || val.length);
+    // remove o trecho @query à frente do cursor
+    const cleanedAfter = afterCursor.replace(/^([A-Za-z0-9_]*)/, '');
+    const insert = `@${u.login} `;
+    input.value = before + insert + cleanedAfter;
+    const pos = before.length + insert.length;
+    input.setSelectionRange(pos, pos);
+    input.focus();
+    hideMentions();
+  }
+
+  async function updateMentionsFromInput() {
+    const input = $('#chat-input');
+    if (!input || !state.user) return hideMentions();
+    const pos = input.selectionStart || 0;
+    const left = input.value.slice(0, pos);
+    const m = left.match(/(^|[\s])@([A-Za-z0-9_]{0,25})$/);
+    if (!m) return hideMentions();
+    const query = m[2];
+    mentionState.start = left.length - query.length - 1;
+    mentionState.query = query;
+    if (query.length < 1) {
+      mentionState.open = false;
+      return renderMentionSuggest();
+    }
+    try {
+      const data = await api(`/api/chat/users?q=${encodeURIComponent(query)}`);
+      mentionState.items = data.users || [];
+      mentionState.index = 0;
+      mentionState.open = mentionState.items.length > 0;
+      renderMentionSuggest();
+    } catch (_) {
+      hideMentions();
+    }
+  }
+
+  function onChatInput() {
+    clearTimeout(mentionTimer);
+    mentionTimer = setTimeout(updateMentionsFromInput, 120);
+  }
+
+  function onChatKeydown(e) {
+    if (!mentionState.open || !mentionState.items.length) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      mentionState.index = (mentionState.index + 1) % mentionState.items.length;
+      renderMentionSuggest();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      mentionState.index = (mentionState.index - 1 + mentionState.items.length) % mentionState.items.length;
+      renderMentionSuggest();
+    } else if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault();
+      applyMention(mentionState.items[mentionState.index]);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      hideMentions();
+    }
+  }
+
+  function setupChat() {
+    const fab = $('#chat-toggle');
+    const close = $('#chat-close');
+    const back = $('#chat-backdrop');
+    const form = $('#chat-form');
+    const input = $('#chat-input');
+    if (fab) fab.addEventListener('click', () => {
+      if (!state.user || !state.chatEnabled) return;
+      setChatOpen(!state.chatOpen);
+      if (state.chatOpen && !state.chatLoaded) loadChat();
+      else if (state.chatOpen) renderChatMessages(true);
+    });
+    if (close) close.addEventListener('click', () => setChatOpen(false));
+    if (back) back.addEventListener('click', () => setChatOpen(false));
+    if (form) form.addEventListener('submit', (ev) => {
+      if (mentionState.open && mentionState.items.length) {
+        ev.preventDefault();
+        applyMention(mentionState.items[mentionState.index]);
+        return;
+      }
+      sendChatMessage(ev);
+    });
+    if (input) {
+      input.addEventListener('input', onChatInput);
+      input.addEventListener('keydown', onChatKeydown);
+      input.addEventListener('blur', () => setTimeout(hideMentions, 150));
+    }
+    const attachBtn = $('#chat-attach-btn');
+    if (attachBtn) attachBtn.addEventListener('click', promptChatAttach);
+    const attachClear = $('#chat-attach-clear');
+    if (attachClear) attachClear.addEventListener('click', clearChatAttach);
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && state.chatOpen && !mentionState.open) setChatOpen(false);
+    });
+    updateChatFab();
+    updateChatAttachUi();
+  }
+
+
   async function init() {
     renderWho();
     initNotify();
@@ -864,9 +1591,23 @@
     try {
       const me = await api('/api/me');
       state.user = me.user;
+      if (Array.isArray(me.nameColors)) state.nameColors = me.nameColors;
+      if (me.chatEnabled !== undefined) state.chatEnabled = Boolean(me.chatEnabled);
+      if (me.chatMedia) {
+        state.chatMedia = {
+          images: me.chatMedia.images !== false,
+          videos: me.chatMedia.videos !== false,
+          embedLinks: me.chatMedia.embedLinks !== false,
+        };
+      }
     } catch (_) { /* segue como visitante */ }
     syncPushUser();
     renderWho();
+    setupIdentityFab();
+    updateIdentityFab();
+    setupChat();
+    updateChatFab();
+    if (state.user && state.chatEnabled) loadChat(true);
     route();
     loadPolls();
     loadPrizes();
@@ -875,6 +1616,10 @@
     setInterval(() => { if (!document.hidden) refresh(); }, 60000);
     // Celulares pausam a conexão com a aba em segundo plano: atualiza ao voltar
     document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+    document.addEventListener('click', () => {
+      const menu = $('#identity-menu');
+      if (menu && !menu.hidden) menu.hidden = true;
+    });
   }
   init();
 })();

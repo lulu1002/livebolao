@@ -56,6 +56,45 @@
   </main>
 
   <div id="toast" role="status" aria-live="polite"></div>
+
+  <!-- Botões fixos: identidade (cor) acima do chat -->
+  <div class="fab-stack" id="fab-stack">
+    <div class="identity-fab-wrap">
+      <button id="identity-toggle" class="identity-fab" type="button" title="Cor do nome" aria-label="Escolher cor do nome" aria-haspopup="true" hidden>🎨</button>
+      <div id="identity-menu" class="identity-menu" hidden role="menu">
+        <h4>Cor do nome</h4>
+        <div id="identity-swatches" class="identity-swatches"></div>
+        <p class="identity-hint">Aparece no chat, ranking e perfil.</p>
+      </div>
+    </div>
+    <button id="chat-toggle" class="chat-fab" type="button" title="Abrir chat" aria-label="Abrir chat" hidden>
+      <span class="chat-fab-icon" aria-hidden="true">💬</span>
+      <span id="chat-badge" class="chat-badge" hidden>0</span>
+    </button>
+  </div>
+
+  <aside id="chat-sidebar" class="chat-sidebar" aria-label="Chat" hidden>
+    <header class="chat-header">
+      <strong>Chat</strong>
+      <button id="chat-close" class="icon-btn" type="button" title="Fechar chat" aria-label="Fechar chat">✕</button>
+    </header>
+    <div id="chat-messages" class="chat-messages" role="log" aria-live="polite" aria-relevant="additions"></div>
+    <div id="chat-muted" class="chat-muted" hidden></div>
+    <div id="chat-attach-bar" class="chat-attach-bar" hidden>
+      <div id="chat-attach-preview" class="chat-attach-preview"></div>
+      <button type="button" id="chat-attach-clear" class="chat-attach-clear" title="Remover anexo">✕</button>
+    </div>
+    <div class="chat-form-wrap">
+      <div id="chat-suggest" class="chat-suggest" hidden role="listbox" aria-label="Menções"></div>
+      <form id="chat-form" class="chat-form" autocomplete="off">
+        <button type="button" id="chat-attach-btn" class="chat-attach-btn" title="Anexar imagem ou vídeo" hidden>📎</button>
+        <input id="chat-input" type="text" maxlength="500" placeholder="Mensagem… use @ para mencionar" aria-label="Mensagem" autocomplete="off">
+        <button type="submit" class="chat-send" title="Enviar">➤</button>
+      </form>
+    </div>
+  </aside>
+  <div id="chat-backdrop" class="chat-backdrop" hidden></div>
+
   <script src="/app.js"></script>
 </body>
 </html>

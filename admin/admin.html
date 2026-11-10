@@ -53,6 +53,7 @@
         <button type="button" role="tab" id="atab-prizes" aria-controls="apane-prizes" aria-selected="false">🏅 Prêmio</button>
         <button type="button" role="tab" id="atab-hall" aria-controls="apane-hall" aria-selected="false">🏆pódio semanal</button>
         <button type="button" role="tab" id="atab-users" aria-controls="apane-users" aria-selected="false">👥 Os meliantes </button>
+        <button type="button" role="tab" id="atab-chat" data-perm="chat|settings" aria-controls="apane-chat" aria-selected="false">💬 Chat</button>
         <button type="button" role="tab" id="atab-tests" data-perm="tests" aria-controls="apane-tests" aria-selected="false">🧪 Testes</button>
         <button type="button" role="tab" id="atab-admins" aria-controls="apane-admins" aria-selected="false" data-perm="owner">🔑 Admins</button>
         <button type="button" role="tab" id="atab-bot" aria-controls="apane-bot" aria-selected="false">🤖 Bot</button>
@@ -340,6 +341,41 @@
       </section>
       </div>
 
+      <div id="apane-chat" data-need="chat|settings" role="tabpanel" aria-labelledby="atab-chat" hidden>
+      <section class="panel" id="chat-panel">
+        <h2>💬 Chat</h2>
+        <p class="hint">Liga/desliga o chat no site, silencia participantes e apaga mensagens.</p>
+
+        <fieldset class="modes" data-need="settings">
+          <legend>Disponibilidade</legend>
+          <label class="aopt"><input type="checkbox" id="chat-enabled"><span>💬 Chat no site principal</span></label>
+          <span class="hint">Desligado, o botão some para todo mundo e ninguém envia mensagem. O histórico fica guardado.</span>
+        </fieldset>
+
+        <fieldset class="modes" data-need="settings">
+          <legend>Mídia</legend>
+          <label class="aopt"><input type="checkbox" id="chat-images"><span>🖼️ Permitir anexar imagens (por link)</span></label>
+          <label class="aopt"><input type="checkbox" id="chat-videos"><span>🎬 Permitir anexar vídeos (por link)</span></label>
+          <label class="aopt"><input type="checkbox" id="chat-embed-links"><span>🔗 Mostrar preview de links de imagem (.png, .jpg, .jpeg…)</span></label>
+          <span class="hint">Anexos usam URL (http/https). O preview automático transforma links de imagem no texto em miniatura clicável.</span>
+        </fieldset>
+
+        <div data-need="chat">
+          <h3 class="section-title mt-125">Silenciados</h3>
+          <p class="hint">Quem está impedido de escrever no chat agora.</p>
+          <div id="chat-mute-list" class="ach-admin-list"></div>
+
+          <h3 class="section-title mt-15">Mensagens recentes</h3>
+          <p class="hint">Últimas 100 mensagens. Apagadas continuam na lista marcadas como removidas.</p>
+          <div class="actions chat-admin-actions">
+            <button class="btn ghost small" id="chat-refresh" type="button" data-keep>Atualizar</button>
+            <button class="btn danger small" id="chat-purge-deleted" type="button">Remover apagadas do banco</button>
+          </div>
+          <div id="chat-msg-list" class="ach-admin-list"></div>
+        </div>
+      </section>
+      </div>
+
       <div id="apane-tests" role="tabpanel" aria-labelledby="atab-tests" hidden>
       <section class="panel narrow-md" id="tests-panel">
         <h2>🧪 Painel de testes</h2>
@@ -357,8 +393,8 @@
         <div class="field">
           <label for="test-count">Criar contas de teste</label>
           <div class="actions">
-            <input id="test-count" type="number" min="1" max="20" value="5" style="max-width:6rem" aria-label="Quantidade">
-            <input id="test-start" type="number" min="0" max="100000" value="100" style="max-width:7rem" aria-label="Pontos iniciais">
+            <input id="test-count" type="number" min="1" max="20" value="5" class="w-6" aria-label="Quantidade">
+            <input id="test-start" type="number" min="0" max="100000" value="100" class="w-7" aria-label="Pontos iniciais">
             <button class="btn" id="test-create" type="button">Criar</button>
           </div>
           <span class="hint">Quantidade (até 20) e pontos iniciais de cada conta.</span>
