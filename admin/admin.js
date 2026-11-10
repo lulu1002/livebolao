@@ -1270,8 +1270,8 @@
       can('bot') && d.twitchConfigured ? h('a', { class: 'btn ghost small', href: '/api/admin/bot/connect' }, d.connected ? 'Trocar conta' : 'Conectar conta do bot') : null,
       can('bot') && d.connected ? h('button', { class: 'btn danger small', type: 'button', onclick: disconnectBot }, 'Desconectar') : null));
     rows.push(h('p', { class: 'hint' }, d.ownApp
-      ? '🔑 O bot usa o app da Twitch próprio (BOT_TWITCH_*).'
-      : 'O bot usa as mesmas credenciais do login. Para outro app, defina BOT_TWITCH_CLIENT_ID e BOT_TWITCH_CLIENT_SECRET.'));
+      ? 'ta usando a chave de bot propria so pra eu lembrar.'
+      : 'O bot usa as mesmas chaves do login num da pra logar bixu.'));
     // Resultado da última tentativa de conectar (fica na tela, com o motivo)
     const [cr, ...crRest] = String(d.connectResult || '').split('|');
     const crDetail = crRest.join('|');
@@ -1287,7 +1287,7 @@
         ? '⚠️ A conta do bot é a dona do canal. Use uma conta separada.'
         : '⚠️ A conta do bot também participa do site. Use uma conta separada.'));
     }
-    rows.push(h('p', { class: 'hint' }, 'Use uma conta diferente da sua. Para autorizar com ela, abra numa janela anônima (a Twitch usa a conta aberta no navegador). Cadastre esta URL em “OAuth Redirect URLs” do app do bot: ', h('code', {}, d.redirectUri)));
+    rows.push(h('p', { class: 'hint' }, 'use uma conta firente da de login se nao num funfa o bagui: ', h('code', {}, d.redirectUri)));
     box.replaceChildren(...rows);
 
     $('#bot-enabled').checked = d.enabled;
