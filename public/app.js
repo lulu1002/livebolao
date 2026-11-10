@@ -242,6 +242,21 @@
   function colorPickerEl() {
     const color = state.user?.nameColor || null;
     const colors = state.nameColors.length ? state.nameColors : [{ id: 'default', label: 'Padrão', value: null }];
+    const isPreset = colors.some((c) => (c.value || null) === (color || null));
+    const isCustom = Boolean(color) && !isPreset;
+
+    // Seletor nativo (quadrado de degradê + slider de matiz). Salva ao confirmar a cor.
+    const picker = h('input', {
+      type: 'color',
+      class: 'identity-picker-input',
+      value: (color || '#3498DB').toLowerCase(),
+      'aria-label': 'Escolher qualquer cor',
+    });
+    const dot = h('span', { class: `identity-swatch identity-custom${isCustom ? ' selected' : ''}` }, picker);
+    if (isCustom) dot.style.background = color;
+    picker.addEventListener('input', () => { dot.style.background = picker.value; });
+    picker.addEventListener('change', () => setNameColor(picker.value.toUpperCase()));
+
     return h('section', { class: 'profile-color' },
       h('h3', { class: 'section-title' }, 'Cor do nome'),
       h('div', { class: 'identity-swatches' }, colors.map((c) => {
@@ -258,6 +273,9 @@
         if (c.value) attrs.style = `background: ${c.value}`;
         return h('button', attrs);
       })),
+      h('label', { class: 'identity-custom-row' },
+        dot,
+        h('span', {}, 'Outra cor (escolha qualquer uma)')),
       h('p', { class: 'identity-hint' }, 'Aparece no chat, ranking e perfil.'));
   }
 

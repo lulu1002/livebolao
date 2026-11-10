@@ -1216,10 +1216,12 @@ const NAME_COLOR_VALUES = new Set(NAME_COLORS.map((c) => c.value).filter(Boolean
 function normalizeNameColor(v) {
   if (v == null || v === '' || v === 'default') return null;
   const s = String(v).trim().toUpperCase();
-  // aceita hex da paleta (case-insensitive)
+  // cores da paleta (case-insensitive)
   for (const allowed of NAME_COLOR_VALUES) {
     if (allowed.toUpperCase() === s) return allowed;
   }
+  // qualquer cor personalizada no formato #RRGGBB (vem do seletor de cores)
+  if (/^#[0-9A-F]{6}$/.test(s)) return s;
   return null;
 }
 const userView = (u) => ({
@@ -1341,7 +1343,7 @@ app.post('/api/me/name-color', requireUser, limit('name-color', 20, 60 * 1000), 
   const wantsDefault = raw === null || raw === '' || raw === 'default';
   const value = wantsDefault ? null : color;
   if (!wantsDefault && value == null) {
-    return res.status(400).json({ error: 'Cor inválida. Escolha uma da paleta.' });
+    return res.status(400).json({ error: 'Cor inválida. Escolha uma da paleta ou use o seletor de cores.' });
   }
   await q('update users set name_color = $2 where id = $1', [req.user.id, value]);
   const { rows } = await q('select * from users where id = $1', [req.user.id]);

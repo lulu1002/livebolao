@@ -1123,6 +1123,30 @@ dialog::backdrop { background: var(--backdrop); }
   outline: 2px solid var(--gold);
   outline-offset: 2px;
 }
+.identity-custom-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-top: 0.6rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.identity-custom {
+  position: relative;
+  flex: none;
+  overflow: hidden;
+  background: conic-gradient(#e74c3c, #e67e22, #f1c40f, #27ae60, #1abc9c, #3498db, #9b59b6, #e91e63, #e74c3c);
+}
+.identity-picker-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  border: 0;
+  padding: 0;
+}
 .identity-hint {
   margin: 0.55rem 0 0;
   font-size: 0.75rem;
