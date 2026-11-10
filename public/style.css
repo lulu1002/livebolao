@@ -694,8 +694,7 @@ dialog::backdrop { background: var(--backdrop); }
   align-items: center;
   gap: 0.55rem;
 }
-.chat-fab,
-.identity-fab {
+.chat-fab {
   position: relative;
   width: 3.4rem;
   height: 3.4rem;
@@ -712,20 +711,8 @@ dialog::backdrop { background: var(--backdrop); }
   background: var(--gold);
   color: var(--on-gold);
 }
-.identity-fab {
-  background: var(--ticket);
-  color: var(--ink);
-  font-size: 1.2rem;
-}
-.chat-fab:hover,
-.identity-fab:hover { transform: scale(1.06); }
-.chat-fab:active,
-.identity-fab:active { transform: scale(0.97); }
-.identity-fab-wrap {
-  position: relative;
-  display: grid;
-  place-items: center;
-}
+.chat-fab:hover { transform: scale(1.06); }
+.chat-fab:active { transform: scale(0.97); }
 .chat-badge {
   position: absolute;
   top: -0.25rem;
@@ -1113,24 +1100,8 @@ dialog::backdrop { background: var(--backdrop); }
 }
 
 
-/* Menu de identidade (cor do nome) */
-.identity-menu {
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 0.45rem);
-  z-index: 45;
-  min-width: 12.5rem;
-  padding: 0.65rem 0.7rem;
-  background: var(--ticket);
-  border: 2px solid var(--ink);
-  border-radius: 12px;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.18);
-}
-.identity-menu h4 {
-  margin: 0 0 0.5rem;
-  font-size: 0.85rem;
-  font-weight: 800;
-}
+/* Seletor de cor do nome (dentro do perfil) */
+.profile-color { margin: 1rem 0; }
 .identity-swatches {
   display: grid;
   grid-template-columns: repeat(5, 1.55rem);

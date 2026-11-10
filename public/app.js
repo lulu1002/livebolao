@@ -236,58 +236,30 @@
       box.append(h('a', { class: 'btn twitch small', href: '/auth/twitch' }, 'Entrar com a Twitch'));
     }
     if (typeof updateChatFab === 'function') updateChatFab();
-    if (typeof updateIdentityFab === 'function') updateIdentityFab();
   }
 
-  function renderIdentityMenu() {
-    const box = $('#identity-swatches');
-    const menu = $('#identity-menu');
-    if (!box || !menu) return;
+  // Seletor de cor do nome: aparece só no perfil da própria pessoa
+  function colorPickerEl() {
     const color = state.user?.nameColor || null;
     const colors = state.nameColors.length ? state.nameColors : [{ id: 'default', label: 'Padrão', value: null }];
-    box.replaceChildren(...colors.map((c) => {
-      const selected = (color || null) === (c.value || null);
-      const attrs = {
-        class: `identity-swatch${selected ? ' selected' : ''}`,
-        type: 'button',
-        title: c.label,
-        'data-color': c.id,
-        'aria-label': c.label,
-        onclick: (e) => {
-          e.stopPropagation();
-          setNameColor(c.value);
-        },
-      };
-      if (c.value) attrs.style = `background: ${c.value}`;
-      return h('button', attrs);
-    }));
+    return h('section', { class: 'profile-color' },
+      h('h3', { class: 'section-title' }, 'Cor do nome'),
+      h('div', { class: 'identity-swatches' }, colors.map((c) => {
+        const selected = (color || null) === (c.value || null);
+        const attrs = {
+          class: `identity-swatch${selected ? ' selected' : ''}`,
+          type: 'button',
+          title: c.label,
+          'data-color': c.id,
+          'aria-label': c.label,
+          'aria-pressed': String(selected),
+          onclick: () => setNameColor(c.value),
+        };
+        if (c.value) attrs.style = `background: ${c.value}`;
+        return h('button', attrs);
+      })),
+      h('p', { class: 'identity-hint' }, 'Aparece no chat, ranking e perfil.'));
   }
-
-  function updateIdentityFab() {
-    const btn = $('#identity-toggle');
-    if (!btn) return;
-    btn.hidden = !state.user;
-    if (!state.user) {
-      const menu = $('#identity-menu');
-      if (menu) menu.hidden = true;
-    } else {
-      renderIdentityMenu();
-    }
-  }
-
-  function setupIdentityFab() {
-    const btn = $('#identity-toggle');
-    if (!btn) return;
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (!state.user) return;
-      const menu = $('#identity-menu');
-      if (!menu) return;
-      renderIdentityMenu();
-      menu.hidden = !menu.hidden;
-    });
-  }
-
 
   async function setNameColor(value) {
     try {
@@ -296,10 +268,11 @@
         body: { color: value == null ? 'default' : value },
       });
       if (data.user) state.user = data.user;
-      const menu = $('#identity-menu');
-      if (menu) menu.hidden = true;
+      if (state.profile && state.user && state.profile.userId === state.user.id) {
+        state.profile.nameColor = state.user.nameColor || null;
+      }
       renderWho();
-      updateIdentityFab();
+      if (state.view === 'profile') renderProfile();
       if (state.chatOpen) renderChatMessages(false);
       if (state.view === 'ranking') loadRanking();
       toast('Cor do nome atualizada');
@@ -832,6 +805,8 @@
         stat('Pontos gerais', p.points),
         stat('Acertos', `${p.hits}/${p.played}`, p.played ? `${p.accuracy}% de aproveitamento` : ''),
         stat('Sequência', p.streak, `melhor: ${p.bestStreak}`)));
+    if (me && !p.isHouse) box.append(colorPickerEl());
+
     if (p.rule.every > 0) {
       box.append(h('p', { class: 'note' },
         `Bônus de sequência: +${p.rule.bonus} pontos a cada ${p.rule.every} acertos seguidos.` +
@@ -1603,8 +1578,6 @@
     } catch (_) { /* segue como visitante */ }
     syncPushUser();
     renderWho();
-    setupIdentityFab();
-    updateIdentityFab();
     setupChat();
     updateChatFab();
     if (state.user && state.chatEnabled) loadChat(true);
@@ -1616,10 +1589,6 @@
     setInterval(() => { if (!document.hidden) refresh(); }, 60000);
     // Celulares pausam a conexão com a aba em segundo plano: atualiza ao voltar
     document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
-    document.addEventListener('click', () => {
-      const menu = $('#identity-menu');
-      if (menu && !menu.hidden) menu.hidden = true;
-    });
   }
   init();
 })();
