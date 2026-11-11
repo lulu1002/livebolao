@@ -1197,3 +1197,10 @@ dialog::backdrop { background: var(--backdrop); }
 }
 .confirm-actions .btn { flex: 1; }
 .confirm-actions .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Data e hora de criação da enquete */
+.created-at {
+  margin: 0.6rem 0 0;
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+}

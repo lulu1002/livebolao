@@ -10,6 +10,7 @@
     topics: [],
     pollTopic: null,
     lockVotes: false,
+    showCreated: true,
     balance: null,
     bet: {}, // rascunho da aposta por enquete: { [pollId]: { optionId, stake } }
     pollsError: null,
@@ -173,6 +174,13 @@
   const fmtDate = (iso) =>
     new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 
+  // Data e hora de criação, com dia da semana e ano (ex.: quarta, 11/11/2026 às 14:32)
+  const WEEKDAYS = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'];
+  const fmtCreated = (iso) => {
+    const d = new Date(iso);
+    return `${WEEKDAYS[d.getDay()]}, ${d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })} às ${d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`;
+  };
+
   const MEDAL = { 1: '🥇', 2: '🥈', 3: '🥉' };
   function weekLabel(w) {
     const day = (iso) => new Date(iso).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
@@ -322,6 +330,7 @@
       state.polls = data.polls;
       state.topics = data.topics || [];
       state.lockVotes = Boolean(data.lockVotes);
+      state.showCreated = data.showCreated !== false;
       state.balance = data.balance == null ? null : data.balance;
       if (data.chatEnabled !== undefined) {
         state.chatEnabled = Boolean(data.chatEnabled);
@@ -507,7 +516,8 @@
         p.description ? h('p', { class: 'desc' }, p.description) : null,
         h('div', { class: 'opts', role: 'radiogroup', 'aria-label': p.title }, p.options.map((o) => renderOption(p, o))),
         p.odds ? betBox(p) : null,
-        noteFor(p)));
+        noteFor(p),
+        state.showCreated && p.createdAt ? h('p', { class: 'created-at' }, `🕒 Criada em ${fmtCreated(p.createdAt)}`) : null));
   }
 
   /* ---------- Tópicos das enquetes ---------- */
@@ -597,7 +607,7 @@
           p.title ? h('p', { class: 'note' }, p.title) : null,
           h('p', { class: 'confirm-pick' }, opt ? opt.text : ''),
           p.odds ? h('p', { class: 'note' }, `Aposta: ${Number(stake) || 0} pts`) : null,
-          h('p', { class: 'note' }, `Se liga Meu Relíkia,Depois de confirmar a bagaça, não dá para trocar o ${what} viu fofin.`),
+          h('p', { class: 'note' }, `Depois de confirmar, não dá para trocar o ${what}.`),
           h('div', { class: 'confirm-actions' }, back, ok)));
       document.addEventListener('keydown', onKey);
       document.body.append(overlay);

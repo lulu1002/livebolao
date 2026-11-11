@@ -2,7 +2,7 @@
   'use strict';
 
   const $ = (sel, root = document) => root.querySelector(sel);
-  const state = { notifyPrize: true, prizes: [], prizeEditing: null, adminUsers: [], polls: [], topics: [], topicTab: null, users: 0, editing: null, mode: 'replace', streak: { every: 0, bonus: 0 }, notify: true, notifyResult: true, notifyClosing: true, hallVisible: true, lockVotes: false, chatEnabled: true, chatImages: true, chatVideos: true, chatEmbedLinks: true, hall: [], pushEnabled: true, house: [], houseEditing: null, achievements: [], achEditing: null };
+  const state = { notifyPrize: true, prizes: [], prizeEditing: null, adminUsers: [], polls: [], topics: [], topicTab: null, users: 0, editing: null, mode: 'replace', streak: { every: 0, bonus: 0 }, notify: true, notifyResult: true, notifyClosing: true, hallVisible: true, lockVotes: false, showPollCreated: true, chatEnabled: true, chatImages: true, chatVideos: true, chatEmbedLinks: true, hall: [], pushEnabled: true, house: [], houseEditing: null, achievements: [], achEditing: null };
 
   /* ---------- Utilidades ---------- */
   function h(tag, attrs = {}, ...children) {
@@ -172,6 +172,8 @@
       state.hallVisible = data.hallVisible;
       state.lockVotes = data.lockVotes;
       $('#lock-votes').checked = state.lockVotes;
+      state.showPollCreated = data.showPollCreated !== false;
+      $('#show-poll-created').checked = state.showPollCreated;
       state.chatEnabled = data.chatEnabled !== false;
       state.chatImages = data.chatImages !== false;
       state.chatVideos = data.chatVideos !== false;
@@ -943,6 +945,7 @@
     });
   }
   bindFlag('#lock-votes', 'lockVotes', 'lockVotes', 'Trava de voto ligada: não dá mais para trocar o voto', 'Trava de voto desligada', () => {});
+  bindFlag('#show-poll-created', 'showPollCreated', 'showPollCreated', 'Data de criação visível nas enquetes', 'Data de criação escondida das enquetes', () => {});
   bindFlag('#chat-enabled', 'chatEnabled', 'chatEnabled', 'Chat ligado no site principal', 'Chat desligado no site principal', () => {});
   bindFlag('#chat-images', 'chatImages', 'chatImages', 'Anexos de imagem ligados', 'Anexos de imagem desligados', () => {});
   bindFlag('#chat-videos', 'chatVideos', 'chatVideos', 'Anexos de vídeo ligados', 'Anexos de vídeo desligados', () => {});

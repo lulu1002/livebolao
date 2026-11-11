@@ -1417,7 +1417,7 @@ app.get('/api/polls', wrap(async (req, res) => {
   // Saldo só é calculado quando há enquete com odd na página e a pessoa está logada
   const balance = u && polls.some((p) => p.odds) ? await availableBalance(u.id) : null;
   const [chatEnabled, chatMedia] = await Promise.all([getChatEnabled(), getChatMediaFlags()]);
-  res.json({ polls, topics: await fetchTopics(), lockVotes: await getLockVotes(), balance, chatEnabled, chatMedia });
+  res.json({ polls, topics: await fetchTopics(), lockVotes: await getLockVotes(), showCreated: await getFlag('show_poll_created'), balance, chatEnabled, chatMedia });
 }));
 
 /* Saldo para apostar = pontos do ranking geral − o que está apostado em enquetes ainda sem resultado */
@@ -1668,6 +1668,7 @@ app.get('/api/admin/polls', requireAdmin, wrap(async (req, res) => {
     notifyClosing: await getFlag('notify_closing'),
     hallVisible: await getFlag('hall_visible'),
     lockVotes: await getLockVotes(),
+    showPollCreated: await getFlag('show_poll_created'),
     chatEnabled: await getChatEnabled(),
     chatImages: (await getChatMediaFlags()).images,
     chatVideos: (await getChatMediaFlags()).videos,
@@ -2821,6 +2822,7 @@ app.post('/api/admin/settings', requirePerm('settings'), wrap(async (req, res) =
     hallVisible: 'hall_visible',
     notifyPrize: 'notify_prize',
     lockVotes: 'lock_votes',
+    showPollCreated: 'show_poll_created',
     chatEnabled: 'chat_enabled',
     chatImages: 'chat_images',
     chatVideos: 'chat_videos',
@@ -2832,7 +2834,7 @@ app.post('/api/admin/settings', requirePerm('settings'), wrap(async (req, res) =
     if (typeof v !== 'boolean') return res.status(400).json({ error: 'Valor inválido.' });
     entries.push([key, v ? '1' : '0']);
     // hall/trava/chat: avisa as páginas abertas para esconder botão, trava, etc.
-    if (field === 'hallVisible' || field === 'lockVotes' || field === 'chatEnabled'
+    if (field === 'hallVisible' || field === 'lockVotes' || field === 'showPollCreated' || field === 'chatEnabled'
       || field === 'chatImages' || field === 'chatVideos' || field === 'chatEmbedLinks') rankingChanged = true;
   }
 
