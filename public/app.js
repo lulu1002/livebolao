@@ -607,7 +607,7 @@
           p.title ? h('p', { class: 'note' }, p.title) : null,
           h('p', { class: 'confirm-pick' }, opt ? opt.text : ''),
           p.odds ? h('p', { class: 'note' }, `Aposta: ${Number(stake) || 0} pts`) : null,
-          h('p', { class: 'note' }, `Depois de confirmar, não dá para trocar o ${what}.`),
+          h('p', { class: 'note' }, `Meu Nobre Apostador Depois de confirmar, não dá para trocar o ${what} hein fofin.`),
           h('div', { class: 'confirm-actions' }, back, ok)));
       document.addEventListener('keydown', onKey);
       document.body.append(overlay);
