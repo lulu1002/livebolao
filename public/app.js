@@ -569,11 +569,48 @@
     }
   }
 
+  // Com a trava de voto ligada o voto é definitivo: pede confirmação antes de enviar
+  function confirmLockedVote(p, optionId, stake) {
+    if ($('#vote-confirm')) return Promise.resolve(false);
+    const opt = p.options.find((o) => o.id === optionId);
+    const what = p.odds ? 'aposta' : 'voto';
+    return new Promise((resolve) => {
+      const prevFocus = document.activeElement;
+      const onKey = (e) => { if (e.key === 'Escape') close(false); };
+      function close(ok) {
+        document.removeEventListener('keydown', onKey);
+        overlay.remove();
+        if (prevFocus && prevFocus.focus) prevFocus.focus({ preventScroll: true });
+        resolve(ok);
+      }
+      const back = h('button', { class: 'btn ghost', type: 'button', onclick: () => close(false) }, 'Voltar');
+      // começa travado por um instante, pra um toque duplo sem querer não confirmar
+      const ok = h('button', { class: 'btn', type: 'button', disabled: true, onclick: () => close(true) },
+        `Confirmar ${what}`);
+      setTimeout(() => { ok.disabled = false; }, 600);
+      const overlay = h('div', {
+        id: 'vote-confirm', class: 'confirm-overlay',
+        onclick: (e) => { if (e.target === overlay) close(false); },
+      },
+        h('div', { class: 'confirm-box', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'vote-confirm-title' },
+          h('h3', { id: 'vote-confirm-title' }, `Confirmar ${what}?`),
+          p.title ? h('p', { class: 'note' }, p.title) : null,
+          h('p', { class: 'confirm-pick' }, opt ? opt.text : ''),
+          p.odds ? h('p', { class: 'note' }, `Aposta: ${Number(stake) || 0} pts`) : null,
+          h('p', { class: 'note' }, `Depois de confirmar, não dá para trocar o ${what}.`),
+          h('div', { class: 'confirm-actions' }, back, ok)));
+      document.addEventListener('keydown', onKey);
+      document.body.append(overlay);
+      back.focus();
+    });
+  }
+
   async function vote(p, optionId, stake) {
     if (!state.user) {
       toast('Entre com a Twitch para dar seu palpite.');
       return;
     }
+    if (state.lockVotes && !p.myVote && !(await confirmLockedVote(p, optionId, stake))) return;
     try {
       const body = p.odds ? { optionId, stake: Number(stake) } : { optionId };
       const { poll, balance } = await api(`/api/polls/${p.id}/vote`, { method: 'POST', body });

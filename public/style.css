@@ -1159,3 +1159,41 @@ dialog::backdrop { background: var(--backdrop); }
 .chat-admin-actions { margin: 0.5rem 0 0.75rem; flex-wrap: wrap; }
 .w-6 { max-width: 6rem; }
 .w-7 { max-width: 7rem; }
+
+/* Confirmação de voto (trava de voto ligada) */
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.55);
+}
+.confirm-box {
+  width: 100%;
+  max-width: 22rem;
+  padding: 1.2rem;
+  background: var(--ticket);
+  color: var(--ink);
+  border: 2px solid var(--ink);
+  border-radius: 14px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+}
+.confirm-box h3 { margin: 0 0 0.5rem; }
+.confirm-box .note { margin: 0.35rem 0; }
+.confirm-pick {
+  margin: 0.6rem 0;
+  padding: 0.55rem 0.7rem;
+  font-weight: 700;
+  background: var(--hover);
+  border-radius: 10px;
+  overflow-wrap: anywhere;
+}
+.confirm-actions {
+  display: flex;
+  gap: 0.6rem;
+  margin-top: 0.9rem;
+}
+.confirm-actions .btn { flex: 1; }
+.confirm-actions .btn:disabled { opacity: 0.5; cursor: not-allowed; }
