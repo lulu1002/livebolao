@@ -20,6 +20,7 @@
         <button type="button" role="tab" id="tab-polls" aria-controls="view-polls" aria-selected="true">Enquetes</button>
         <button type="button" role="tab" id="tab-ranking" aria-controls="view-ranking" aria-selected="false">Ranking</button>
         <button type="button" role="tab" id="tab-prizes" aria-controls="view-prizes" aria-selected="false" hidden>Prêmios</button>
+        <button type="button" role="tab" id="tab-challenges" aria-controls="view-challenges" aria-selected="false" hidden>⚔️ X1 Bolados<span id="chal-badge" class="chal-badge" hidden>0</span></button>
       </nav>
       <div class="head-actions">
         <button id="theme-toggle" class="icon-btn" type="button" title="Mudar o tema" aria-label="Mudar o tema">🌙</button>
@@ -48,6 +49,10 @@
 
     <section id="view-prizes" role="tabpanel" aria-labelledby="tab-prizes" hidden>
       <div id="prizes"></div>
+    </section>
+
+    <section id="view-challenges" role="tabpanel" aria-labelledby="tab-challenges" hidden>
+      <div id="challenges"></div>
     </section>
 
     <section id="view-profile" hidden>

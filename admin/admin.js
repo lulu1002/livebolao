@@ -79,7 +79,7 @@
     $('#admin-pass').focus();
   }
 
-  const ADMIN_TABS = ['create', 'polls', 'house', 'streak', 'ach', 'prizes', 'hall', 'users', 'chat', 'tests', 'admins', 'bot', 'log', 'backup'];
+  const ADMIN_TABS = ['create', 'polls', 'house', 'streak', 'ach', 'prizes', 'hall', 'users', 'challenges', 'chat', 'tests', 'admins', 'bot', 'log', 'backup'];
 
   // Nível de acesso de quem está logado (vem de /api/admin/me). O servidor confere tudo de novo; aqui só se esconde o que não vale.
   let me = { owner: false, permissions: [], name: '' };
@@ -121,6 +121,7 @@
     // Estas abas carregam só quando abertas (a lista de usuários é a mais pesada)
     if (tab === 'prizes') loadPrizes();
     if (tab === 'users') loadUsers();
+    if (tab === 'challenges') loadChallengesAdmin();
     if (tab === 'chat') loadChatAdmin();
     if (tab === 'tests') loadTests();
     if (tab === 'admins') loadAdmins();
@@ -1783,6 +1784,111 @@
       else $('#ach-error').textContent = err.message;
     } finally {
       submit.disabled = false;
+    }
+  });
+
+  /* ---------- Aba X1 Bolados ---------- */
+  const CHAL_ADMIN_STATUS = { pending: 'Esperando resposta', active: 'Valendo', settled: 'Decidido', declined: 'Recusado', cancelled: 'Anulado', expired: 'Expirado' };
+  const chalAdmin = { list: [], enabled: true, maxStake: null };
+
+  async function loadChallengesAdmin() {
+    try {
+      const d = await api('/api/admin/challenges');
+      chalAdmin.list = d.challenges;
+      chalAdmin.enabled = d.enabled !== false;
+      chalAdmin.maxStake = d.maxStake;
+      $('#chal-enabled').checked = chalAdmin.enabled;
+      $('#chal-max').value = d.maxStake || '';
+      renderChallengesAdmin();
+    } catch (e) {
+      handleError(e);
+    }
+  }
+
+  function chalAdminAct(request, okMessage) {
+    return request().then(() => { toast(okMessage); return loadChallengesAdmin(); }).catch(handleError);
+  }
+
+  function renderChallengesAdmin() {
+    const box = $('#chal-admin-list');
+    const f = $('#chal-filter').value;
+    const open = ['pending', 'active'];
+    const list = chalAdmin.list.filter((c) => (f === 'all' ? true
+      : f === 'open' ? open.includes(c.status)
+      : f === 'settled' ? c.status === 'settled'
+      : ['declined', 'cancelled', 'expired'].includes(c.status)));
+    box.replaceChildren();
+    if (!list.length) {
+      box.append(h('p', { class: 'hint' }, 'Nenhum X1 Bolado nesta lista.'));
+      return;
+    }
+    box.append(...list.map((c) => {
+      const winner = c.winnerId ? (c.winnerId === c.creator.id ? c.creator : c.opponent) : null;
+      const status = `${CHAL_ADMIN_STATUS[c.status]}${c.status === 'settled' ? (winner ? ` · ${winner.name} ganhou` : ' · empate') : ''}`;
+      const kind = c.kind === 'poll' ? 'enquete' : `mediador: ${c.mediator ? c.mediator.name : 'admin'}`;
+      const sides = c.kind === 'poll' && c.status === 'pending' ? `${c.creatorSide} × ?` : `${c.creatorSide || '?'} × ${c.opponentSide || '?'}`;
+      const actions = [];
+      if (c.kind === 'custom' && ['active', 'settled'].includes(c.status)) {
+        actions.push(
+          h('button', { class: 'btn small', type: 'button', onclick: () => chalResolve(c, 'creator') }, `🏆 ${c.creator.name}`),
+          h('button', { class: 'btn small', type: 'button', onclick: () => chalResolve(c, 'opponent') }, `🏆 ${c.opponent.name}`),
+          h('button', { class: 'btn ghost small', type: 'button', onclick: () => chalResolve(c, 'draw') }, 'Empate'));
+      }
+      if (['pending', 'active', 'settled'].includes(c.status)) {
+        actions.push(h('button', { class: 'btn ghost small', type: 'button', onclick: () => chalVoid(c) }, 'Anular'));
+      }
+      actions.push(h('button', { class: 'btn danger small', type: 'button', onclick: () => chalDelete(c) }, 'Excluir'));
+      return h('div', { class: 'house-row' },
+        h('span', { class: 'nm' }, `${c.title}`,
+          h('small', { class: 'hint' }, `${c.creator.name} vs ${c.opponent.name} · ${c.stake} pts · ${sides}`),
+          h('small', { class: 'hint' }, `${status} · ${kind} · criado em ${fmtDate(c.createdAt)}`)),
+        actions);
+    }));
+  }
+  $('#chal-filter').addEventListener('change', renderChallengesAdmin);
+
+  function chalResolve(c, winner) {
+    const who = winner === 'creator' ? c.creator.name : winner === 'opponent' ? c.opponent.name : null;
+    const msg = who
+      ? `${who} ganhou "${c.title}"? Ele leva ${c.stake} pts do outro lado.${c.status === 'settled' ? ' Isso corrige o resultado já registrado.' : ''}`
+      : `Declarar empate em "${c.title}"? Ninguém perde pontos.`;
+    if (!confirm(msg)) return;
+    chalAdminAct(() => api(`/api/admin/challenges/${c.id}/resolve`, { method: 'POST', body: { winner } }), 'Resultado do X1 Bolado registrado');
+  }
+
+  function chalVoid(c) {
+    const extra = c.status === 'settled' ? ' Os pontos que ele já deu ou tirou saem do ranking.' : '';
+    if (!confirm(`Anular "${c.title}"? Os pontos voltam para os dois.${extra}`)) return;
+    chalAdminAct(() => api(`/api/admin/challenges/${c.id}/void`, { method: 'POST' }), 'X1 Bolado anulado. Pontos devolvidos');
+  }
+
+  function chalDelete(c) {
+    const extra = c.status === 'settled' && c.winnerId ? ' Os pontos que ele deu/tirou saem do ranking.' : '';
+    if (!confirm(`Excluir "${c.title}" de vez?${extra}`)) return;
+    chalAdminAct(() => api(`/api/admin/challenges/${c.id}`, { method: 'DELETE' }), 'X1 Bolado excluído');
+  }
+
+  $('#chal-enabled').addEventListener('change', async (e) => {
+    const value = e.target.checked;
+    try {
+      await api('/api/admin/challenges/config', { method: 'POST', body: { enabled: value } });
+      chalAdmin.enabled = value;
+      toast(value ? 'X1 Bolados ligados no site' : 'X1 Bolados desligados no site');
+    } catch (err) {
+      e.target.checked = !value;
+      handleError(err);
+    }
+  });
+
+  $('#chal-max-save').addEventListener('click', async () => {
+    $('#chal-config-error').textContent = '';
+    const raw = $('#chal-max').value.trim();
+    try {
+      await api('/api/admin/challenges/config', { method: 'POST', body: { maxStake: raw === '' ? null : Number(raw) } });
+      toast(raw === '' ? 'Limite removido' : 'Limite salvo');
+    } catch (err) {
+      if (err.status === 401) handleError(err);
+      else $('#chal-config-error').textContent = err.message;
     }
   });
 

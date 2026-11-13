@@ -65,6 +65,22 @@ O botão **Cancelar e devolver pontos** (permissão “encerrar, reabrir e defin
 
 Na aba Criar do admin, a caixa **Não deixar o participante trocar o voto** (desligada por padrão) impede qualquer troca depois do primeiro voto ou aposta, em todas as enquetes.
 
+## X1 Bolados (aposta 1 contra 1)
+
+Aba **⚔️ X1 Bolados** no site (e botão **⚔️ Desafiar alguém nesta enquete** em cada enquete aberta). Um participante desafia outro valendo pontos do **ranking geral**; cada um aposta o mesmo valor.
+
+**Dois tipos:**
+- **Numa enquete aberta:** quem desafia escolhe a sua opção; o desafiado **escolhe a dele ao aceitar** (qualquer opção diferente da sua; se sobrar só uma, entra nela). Quando o admin define a resposta certa, quem estiver nela **leva os pontos do outro**. Se nenhuma das duas for a certa (ou "a casa ganha"), empata e ninguém perde. Se o admin trocar a resposta depois, o X1 Bolado é recalculado; se cancelar a enquete, tudo é devolvido.
+- **Com mediador (X1 Bolado livre):** o desafiante escreve o X1 Bolado e o lado de cada um e escolhe um **mediador** — outro participante (uma terceira pessoa) ou o **admin**. O mediador decide quem ganhou (ou empate) e o vencedor leva os pontos do outro. O mediador pode desistir de mediar (tudo é anulado e devolvido). O admin pode decidir, corrigir ou anular pela aba **⚔️ X1 Bolados** do painel.
+
+**Fluxo e pontos:** o X1 Bolado nasce *pendente* (os pontos de quem desafiou já ficam travados); o desafiado pode **aceitar** (trava os pontos dele também), **recusar** ou deixar expirar (prazo escolhido ao criar: 6 h a 7 dias; em X1 Bolado de enquete, no máximo até o fechamento da enquete). Pontos travados saem do saldo para apostar (o mesmo saldo das enquetes com odd, então ninguém aposta o que não tem). Ao decidir, o vencedor soma o valor e o perdedor perde o valor no ranking geral **e** no semanal, no histórico do perfil (⚔️) e nos prêmios únicos. X1 Bolado **não** conta como palpite: não mexe em acertos, sequência nem conquistas.
+
+**Avisos:** o desafiado, o mediador e os dois lados recebem notificação push (se ligada) e a aba mostra uma bolinha com quantos X1 Bolados esperam resposta ou decisão. Limites: 10 X1 Bolados pendentes por pessoa; não dá para desafiar a si mesmo, contas da casa, banidos nem contas de teste.
+
+**Admin:** aba **⚔️ X1 Bolados** (permissão própria "X1 Bolado", que o dono pode dar aos outros admins): liga/desliga o recurso, define um valor máximo por X1 Bolado, lista tudo com filtros e permite decidir/corrigir (X1 Bolado livre), **anular** (devolve os pontos, até de um já decidido) e **excluir**. Tudo entra no Histórico de ações.
+
+O banco é atualizado sozinho no deploy (tabela `challenges`, no `schema.sql`; o backup também inclui os X1 Bolados). O código das rotas fica em `challenges.js`.
+
 ## Painel de testes
 
 Na aba **🧪 Testes** do admin você cria contas fictícias (com pontos iniciais), faz cada uma votar ou apostar, faz todas votarem aleatoriamente de uma vez e dá ±100 pontos. Elas aparecem no ranking com 🧪, não levam prêmio único nem entram no pódio, e **Apagar contas de teste** remove tudo delas. Evite zerar o ranking semanal com contas de teste ativas.

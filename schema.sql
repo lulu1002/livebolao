@@ -396,3 +396,35 @@ alter table chat_messages add constraint chat_messages_body_check check (char_le
 
 -- Cor do nome escolhida pelo usuário (identidade). Hex da paleta permitida no servidor.
 alter table users add column if not exists name_color text;
+
+-- Desafios (bolão 1 contra 1): um participante desafia outro valendo pontos do ranking geral.
+--   kind 'poll'   = em cima de uma enquete vigente (cada lado escolhe uma opção diferente; quem estiver na certa leva);
+--   kind 'custom' = desafio livre, com um mediador (um participante ou o admin) que paga o lado certo.
+-- Status: pending (esperando o desafiado) -> active (aceito, pontos travados) -> settled (vencedor definido;
+-- winner_id nulo = empate, nada muda). declined / cancelled / expired devolvem tudo.
+create table if not exists challenges (
+  id                text primary key,
+  kind              text not null check (kind in ('poll', 'custom')),
+  creator_id        text not null references users(id) on delete cascade,
+  opponent_id       text not null references users(id) on delete cascade,
+  mediator_id       text references users(id) on delete set null, -- só em 'custom'; nulo = o admin decide
+  poll_id           text references polls(id) on delete set null,
+  creator_option_id text,
+  opponent_option_id text,
+  title             text not null default '',
+  description       text not null default '',
+  creator_side      text not null default '',
+  opponent_side     text not null default '',
+  stake             integer not null check (stake between 1 and 1000000),
+  status            text not null default 'pending'
+                    check (status in ('pending', 'active', 'settled', 'declined', 'cancelled', 'expired')),
+  winner_id         text references users(id) on delete set null,
+  expires_at        timestamptz not null,
+  created_at        timestamptz not null default now(),
+  accepted_at       timestamptz,
+  resolved_at       timestamptz
+);
+create index if not exists challenges_creator_idx  on challenges (creator_id, status);
+create index if not exists challenges_opponent_idx on challenges (opponent_id, status);
+create index if not exists challenges_poll_idx     on challenges (poll_id);
+alter table challenges enable row level security;

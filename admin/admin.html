@@ -53,6 +53,7 @@
         <button type="button" role="tab" id="atab-prizes" aria-controls="apane-prizes" aria-selected="false">🏅 Prêmio</button>
         <button type="button" role="tab" id="atab-hall" aria-controls="apane-hall" aria-selected="false">🏆pódio semanal</button>
         <button type="button" role="tab" id="atab-users" aria-controls="apane-users" aria-selected="false">👥 Os meliantes </button>
+        <button type="button" role="tab" id="atab-challenges" aria-controls="apane-challenges" aria-selected="false">⚔️ X1 Bolados</button>
         <button type="button" role="tab" id="atab-chat" data-perm="chat|settings" aria-controls="apane-chat" aria-selected="false">💬 Chat</button>
         <button type="button" role="tab" id="atab-tests" data-perm="tests" aria-controls="apane-tests" aria-selected="false">🧪 Testes</button>
         <button type="button" role="tab" id="atab-admins" aria-controls="apane-admins" aria-selected="false" data-perm="owner">🔑 Admins</button>
@@ -343,6 +344,33 @@
           <input id="user-search" data-keep type="search" placeholder="Nome ou login" autocomplete="off">
         </div>
         <div id="user-list" class="ach-admin-list"></div>
+      </section>
+      </div>
+
+      <div id="apane-challenges" data-need="challenges" role="tabpanel" aria-labelledby="atab-challenges" hidden>
+      <section class="panel" id="chal-panel">
+        <h2>⚔️ X1 Bolados</h2>
+        <p class="hint">Os participantes apostam pontos do ranking uns contra os outros: numa enquete aberta (o resultado sai da resposta certa da enquete) ou num X1 Bolado livre com mediador. Aqui você liga/desliga, decide X1 Bolados que ficaram sem mediador, anula (devolve os pontos) ou exclui.</p>
+        <fieldset class="modes">
+          <legend>Configuração</legend>
+          <label class="aopt"><input type="checkbox" id="chal-enabled"><span>⚔️ X1 Bolados ligados no site</span></label>
+          <div class="field">
+            <label for="chal-max">Valor máximo por X1 Bolado (pontos; vazio = sem limite)</label>
+            <input id="chal-max" type="number" min="1" max="1000000" step="1" inputmode="numeric" placeholder="Sem limite">
+          </div>
+          <p class="error" id="chal-config-error" role="alert"></p>
+          <button class="btn small" id="chal-max-save" type="button">Salvar limite</button>
+        </fieldset>
+        <div class="field">
+          <label for="chal-filter">Mostrar</label>
+          <select id="chal-filter" class="chal-select" data-keep>
+            <option value="open">Em andamento (esperando e valendo)</option>
+            <option value="settled">Decididos</option>
+            <option value="closed">Recusados, anulados e expirados</option>
+            <option value="all">Todos</option>
+          </select>
+        </div>
+        <div id="chal-admin-list" class="ach-admin-list"></div>
       </section>
       </div>
 

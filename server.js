@@ -76,6 +76,7 @@ const pool = new Pool({
 pool.on('error', (e) => console.error('Erro no pool do Postgres:', e.message));
 
 const q = (text, params) => pool.query(text, params);
+let challenges = null; // módulo dos X1 Bolados, criado mais abaixo (challenges.js)
 
 async function tx(fn) {
   const client = await pool.connect();
@@ -148,6 +149,7 @@ const PERMISSIONS = [
   { key: 'bot', group: 'Outros', label: 'Bot da Twitch (conectar, configurar e testar)' },
   { key: 'backup', group: 'Outros', label: 'Baixar backup' },
   { key: 'chat', group: 'Outros', label: 'Moderar o chat (apagar mensagens e silenciar)' },
+  { key: 'challenges', group: 'Outros', label: 'X1 Bolado (ligar/desligar, decidir, anular e excluir)' },
 ];
 const PERMISSION_KEYS = PERMISSIONS.map((p) => p.key);
 
@@ -624,9 +626,27 @@ async function syncPrizes(list, openPrizes, removed, reachByUser) {
   return byUser;
 }
 
+/* Resultado dos X1 Bolados já decididos (com vencedor), uma linha por participante: +aposta para quem ganhou,
+   −aposta para quem perdeu. Empate (sem vencedor), pendente, recusado e anulado não mexem em pontos. */
+const CHALLENGE_RESULTS_SQL = `select r.user_id, r.delta, r.at, r.title, r.versus, r.my_side
+  from (
+    select c.winner_id as user_id, c.stake as delta, c.resolved_at as at, c.title,
+           lu.display_name as versus,
+           case when c.winner_id = c.creator_id then c.creator_side else c.opponent_side end as my_side
+    from challenges c join users lu on lu.id = (case when c.winner_id = c.creator_id then c.opponent_id else c.creator_id end)
+    where c.status = 'settled' and c.winner_id is not null
+    union all
+    select (case when c.winner_id = c.creator_id then c.opponent_id else c.creator_id end), -c.stake, c.resolved_at, c.title,
+           wu.display_name,
+           case when c.winner_id = c.creator_id then c.opponent_side else c.creator_side end
+    from challenges c join users wu on wu.id = c.winner_id
+    where c.status = 'settled' and c.winner_id is not null
+  ) r
+  where r.at > $1`;
+
 async function computeStandings() {
   const { general: generalResetAt } = await getResetAts();
-  const [users, results, rounds, rule, achDefs, titleRows, adjRows, prizeRows, removedRows] = await Promise.all([
+  const [users, results, rounds, rule, achDefs, titleRows, adjRows, prizeRows, removedRows, challengeRows] = await Promise.all([
     q('select id, display_name, login, avatar_url, is_house, is_test, name_color from users where not banned'),
     q(
       `select r.user_id, r.poll_title, r.chosen, r.correct, r.points, r.hit, r.at, r.gain, r.stake
@@ -658,6 +678,7 @@ async function computeStandings() {
     q('select user_id, delta, created_at as at from point_adjustments where created_at > $1', [generalResetAt]),
     q('select id, name, points from prizes where open and holder_id is null'),
     q('select prize_id, user_id from prize_removed'),
+    q(CHALLENGE_RESULTS_SQL, [generalResetAt]),
   ]);
 
   const stats = new Map(users.rows.map((u) => [u.id, {
@@ -679,6 +700,9 @@ async function computeStandings() {
     titles: 0,
     bonus: 0,
     adjust: 0,
+    challengesWon: 0,
+    challengesLost: 0,
+    challengeNet: 0,
     history: [],
   }]));
 
@@ -706,6 +730,7 @@ async function computeStandings() {
   const events = [
     ...results.rows.map((r) => ({ ...r, kind: 'result' })),
     ...adjRows.rows.map((a) => ({ user_id: a.user_id, delta: a.delta, at: a.at, kind: 'adjust' })),
+    ...challengeRows.rows.map((c) => ({ ...c, kind: 'challenge' })),
   ].sort((a, b) => when(a.at) - when(b.at));
 
   for (const r of events) {
@@ -714,6 +739,26 @@ async function computeStandings() {
     if (r.kind === 'adjust') {
       s.points += r.delta;
       s.adjust += r.delta;
+      trackPrizes(s, r.at);
+      continue;
+    }
+    if (r.kind === 'challenge') {
+      // X1 Bolado: mexe só nos pontos (não conta como palpite, acerto nem sequência)
+      s.points += r.delta;
+      s.challengeNet += r.delta;
+      if (r.delta > 0) s.challengesWon += 1; else s.challengesLost += 1;
+      s.history.push({
+        title: `⚔️ ${r.title}`,
+        challenge: true,
+        versus: r.versus,
+        chosen: r.my_side,
+        correct: null,
+        hit: r.delta > 0,
+        points: r.delta,
+        stake: Math.abs(r.delta),
+        bonus: 0,
+        at: iso(r.at),
+      });
       trackPrizes(s, r.at);
       continue;
     }
@@ -787,7 +832,7 @@ async function computeStandings() {
    recente. Não tem emblema, sequência nem histórico — é só o placar da semana. */
 async function computeWeeklyStandings() {
   const { weekly: weeklyResetAt } = await getResetAts();
-  const [users, totals, adj] = await Promise.all([
+  const [users, totals, adj, chal] = await Promise.all([
     q('select id, display_name, login, avatar_url, is_house, is_test, name_color from users where not banned'),
     q(
       `select r.user_id,
@@ -807,10 +852,12 @@ async function computeWeeklyStandings() {
       [weeklyResetAt]
     ),
     q('select user_id, sum(delta)::int as delta from point_adjustments where created_at > $1 group by user_id', [weeklyResetAt]),
+    q('select user_id, sum(delta)::int as delta from (' + CHALLENGE_RESULTS_SQL + ') x group by user_id', [weeklyResetAt]),
   ]);
 
   const byUser = new Map(totals.rows.map((r) => [r.user_id, r]));
   const adjByUser = new Map(adj.rows.map((r) => [r.user_id, r.delta]));
+  for (const r of chal.rows) adjByUser.set(r.user_id, (adjByUser.get(r.user_id) || 0) + r.delta); // X1 Bolados entram como ajuste de pontos
   const list = users.rows.map((u) => {
     const t = byUser.get(u.id);
     return {
@@ -1000,6 +1047,10 @@ const ADMIN_ACTIONS = [
   ['POST', /^\/chat\/purge-deleted$/, 'Removeu do banco as mensagens apagadas do chat'],
   ['POST', /^\/chat\/mute$/, 'Silenciou um usuário no chat', (b, c) => `${c.user || ''} (${b?.duration || 'permanent'})${b?.reason ? ` — ${b.reason}` : ''}`],
   ['DELETE', /^\/chat\/mute\/[^/]+$/, 'Tirou o silêncio de um usuário no chat', (b, c) => c.user],
+  ['POST', /^\/challenges\/config$/, 'Mudou a configuração dos X1 Bolados', (b) => Object.keys(b || {}).map((k) => `${k}=${b[k]}`).join(', ')],
+  ['POST', /^\/challenges\/[^/]+\/resolve$/, 'Decidiu o vencedor de um X1 Bolado', (b, c) => `${c.title || ''} → ${b?.winner}`],
+  ['POST', /^\/challenges\/[^/]+\/void$/, 'Anulou um X1 Bolado (pontos devolvidos)', (b, c) => c.title],
+  ['DELETE', /^\/challenges\/[^/]+$/, 'Excluiu um X1 Bolado', (b, c) => c.title],
   ['POST', /^\/bot\/config$/, 'Mudou a configuração do bot da Twitch'],
   ['POST', /^\/bot\/test$/, 'Enviou mensagem de teste do bot'],
   ['POST', /^\/bot\/disconnect$/, 'Desconectou a conta do bot'],
@@ -1016,6 +1067,7 @@ async function actionContext(path, body) {
     if ((m = path.match(/^\/polls\/([^/]+)/))) ctx.title = (await q('select title from polls where id = $1', [m[1]])).rows[0]?.title;
     else if (path === '/chat/mute' && body && body.userId) ctx.user = (await q('select display_name from users where id = $1', [String(body.userId)])).rows[0]?.display_name;
     else if ((m = path.match(/^\/(?:users|house-accounts|chat\/mute)\/([^/]+)/))) ctx.user = (await q('select display_name from users where id = $1', [m[1]])).rows[0]?.display_name;
+    else if ((m = path.match(/^\/challenges\/([^/]+)/)) && m[1] !== 'config') ctx.title = (await q('select title from challenges where id = $1', [m[1]])).rows[0]?.title;
     else if ((m = path.match(/^\/topics\/([^/]+)/))) ctx.name = (await q('select name from poll_topics where id = $1', [m[1]])).rows[0]?.name;
     else if ((m = path.match(/^\/admins\/([^/]+)/))) ctx.admin = (await q('select name from admins where id = $1', [m[1]])).rows[0]?.name;
   } catch (_) { /* o histórico nunca pode derrubar a ação */ }
@@ -1417,7 +1469,7 @@ app.get('/api/polls', wrap(async (req, res) => {
   // Saldo só é calculado quando há enquete com odd na página e a pessoa está logada
   const balance = u && polls.some((p) => p.odds) ? await availableBalance(u.id) : null;
   const [chatEnabled, chatMedia] = await Promise.all([getChatEnabled(), getChatMediaFlags()]);
-  res.json({ polls, topics: await fetchTopics(), lockVotes: await getLockVotes(), showCreated: await getFlag('show_poll_created'), balance, chatEnabled, chatMedia });
+  res.json({ polls, topics: await fetchTopics(), lockVotes: await getLockVotes(), showCreated: await getFlag('show_poll_created'), balance, chatEnabled, chatMedia, challengesEnabled: await challenges.enabled() });
 }));
 
 /* Saldo para apostar = pontos do ranking geral − o que está apostado em enquetes ainda sem resultado */
@@ -1428,7 +1480,17 @@ async function lockedStakes(client, userId, exceptPollId = '') {
      where v.user_id = $1 and v.stake is not null and p.correct_option_id is null and not p.cancelled and p.id <> $2`,
     [userId, exceptPollId]
   );
-  return rows[0].n;
+  // X1 Bolados: quem desafiou trava os pontos já na proposta; o desafiado, só depois de aceitar
+  const ch = await client.query(
+    `select coalesce(sum(stake), 0)::int as n from challenges
+     where (status = 'active' and (creator_id = $1 or opponent_id = $1))
+        or (status = 'pending' and creator_id = $1 and expires_at > now()
+            and (poll_id is null or exists (select 1 from polls p where p.id = challenges.poll_id
+                 and not p.closed and not p.cancelled and p.correct_option_id is null
+                 and (p.closes_at is null or p.closes_at > now()))))`,
+    [userId]
+  );
+  return rows[0].n + ch.rows[0].n;
 }
 async function availableBalance(userId, exceptPollId = '', client = pool) {
   const st = await computeStandings();
@@ -1854,6 +1916,7 @@ app.post('/api/admin/polls/:id/cancel', requirePerm('polls_resolve'), wrap(async
     if (!rows.length) return 'notfound';
     if (rows[0].cancelled) return 'already';
     await c.query('update polls set cancelled = true, closed = true, correct_option_id = null, resolved_at = null where id = $1', [req.params.id]);
+    await challenges.cancelAllOfPoll(c, req.params.id, true); // X1 Bolados dessa enquete: tudo devolvido
     return 'ok';
   });
   if (result === 'notfound') return notFound(res);
@@ -1878,6 +1941,7 @@ app.post('/api/admin/polls/:id/reopen', requirePerm('polls_resolve'), wrap(async
       );
       await c.query('delete from votes where poll_id = $1', [req.params.id]);
     }
+    if (scoring && choice === 'keep') await challenges.detachSettledOfPoll(c, req.params.id); // resultado dos X1 Bolados fica gravado
     if (scoring && choice === 'zero') {
       await c.query('delete from awards where poll_id = $1', [req.params.id]);
     }
@@ -1892,6 +1956,7 @@ app.post('/api/admin/polls/:id/reopen', requirePerm('polls_resolve'), wrap(async
   });
   if (result === 'notfound') return notFound(res);
   if (result === 'choose') return res.status(400).json({ error: 'Escolha o que fazer com os pontos desta enquete.' });
+  if (choice === 'zero') await challenges.settlePollChallenges(req.params.id); // sem resposta: X1 Bolados voltam a ficar ativos
   res.json({ ok: true });
 }));
 
@@ -1971,6 +2036,7 @@ app.post('/api/admin/polls/:id/resolve', requirePerm('polls_resolve'), wrap(asyn
     [req.params.id, optionId]
   );
   if (!r.rowCount) return notFound(res);
+  await challenges.settlePollChallenges(req.params.id); // X1 Bolados dessa enquete: o vencedor leva a aposta do outro
   await computeStandings(); // grava na hora os emblemas desbloqueados com este resultado
   // Só avisa na primeira vez que a enquete recebe resposta (corrigir a resposta não reenvia)
   if (!prev.rows[0]?.correct_option_id) {
@@ -2063,6 +2129,8 @@ app.delete('/api/admin/polls/:id', requirePerm('polls_delete'), wrap(async (req,
       );
     }
     // "zero": não grava nada em awards, então os pontos dela não valem mais nada
+    // X1 Bolados: com "manter" os já decididos ficam gravados (soltam-se da enquete); o resto é devolvido
+    await challenges.cancelAllOfPoll(c, req.params.id, !(scoring && choice === 'keep'));
     await c.query('delete from polls where id = $1', [req.params.id]);
     return 'ok';
   });
@@ -2929,13 +2997,14 @@ app.delete('/api/admin/achievements/:id', requirePerm('achievements'), wrap(asyn
 
 /* Cópia dos dados em JSON (os dados já ficam no Supabase; isto é uma segurança extra) */
 app.get('/api/admin/backup', requirePerm('backup'), wrap(async (req, res) => {
-  const [users, polls, options, votes, awards, settings] = await Promise.all([
+  const [users, polls, options, votes, awards, settings, challengeRows] = await Promise.all([
     q('select * from users order by created_at'),
     q('select * from polls order by created_at'),
     q('select * from poll_options order by poll_id, position'),
     q('select * from votes'),
     q('select * from awards order by id'),
     q('select * from settings'),
+    q('select * from challenges order by created_at'),
   ]);
   const day = new Date().toISOString().slice(0, 10);
   res.setHeader('Content-Disposition', `attachment; filename="bolao-backup-${day}.json"`);
@@ -2947,6 +3016,7 @@ app.get('/api/admin/backup', requirePerm('backup'), wrap(async (req, res) => {
     votes: votes.rows,
     awards: awards.rows,
     settings: settings.rows,
+    challenges: challengeRows.rows,
   });
 }));
 
@@ -3236,6 +3306,14 @@ app.get('/api/admin/chat/messages', requirePerm('chat'), wrap(async (req, res) =
     })),
   });
 }));
+
+/* ---------- X1 Bolado (ver challenges.js) ---------- */
+// `challenges` é usado pelas rotas de enquete acima só durante requisições, quando já está pronto.
+challenges = require('./challenges')({
+  app, q, tx, wrap, uid, limit, requireUser, requireAdmin, requirePerm, broadcast,
+  fetchPolls, pollStatus, getFlag, getSetting, setSetting, iso, sendPush, pushEnabled: PUSH_ENABLED, short,
+  computeStandings, lockedStakes, availableBalance,
+});
 
 /* ---------- Páginas e arquivos estáticos ---------- */
 // A página e o script do admin ficam fora de /public: só existem sob o endereço secreto.
