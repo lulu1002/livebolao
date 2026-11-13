@@ -1344,10 +1344,10 @@
             h('input', { id: 'chal-title-in', maxlength: 120, value: d.title, placeholder: 'Ex.: Quem vence o jogo de hoje?', oninput: (e) => { d.title = e.target.value; } })),
           h('div', { class: 'field' }, h('label', { for: 'chal-desc-in' }, 'Detalhes (opcional)'),
             h('textarea', { id: 'chal-desc-in', maxlength: 300, rows: 2, placeholder: 'Regras, horário, como vai ser decidido…', oninput: (e) => { d.description = e.target.value; } }, d.description)),
-          h('div', { class: 'field' }, h('label', { for: 'chal-s1' }, 'Seu lado'),
-            h('input', { id: 'chal-s1', maxlength: 60, value: d.creatorSide, placeholder: 'Ex.: Time A', oninput: (e) => { d.creatorSide = e.target.value; } })),
-          h('div', { class: 'field' }, h('label', { for: 'chal-s2' }, 'Lado do desafiado'),
-            h('input', { id: 'chal-s2', maxlength: 60, value: d.opponentSide, placeholder: 'Ex.: Time B', oninput: (e) => { d.opponentSide = e.target.value; } })));
+          h('div', { class: 'field' }, h('label', { for: 'chal-s1' }, 'Minha resposta'),
+            h('input', { id: 'chal-s1', maxlength: 60, value: d.creatorSide, placeholder: 'Minha resposta', oninput: (e) => { d.creatorSide = e.target.value; } })),
+          h('div', { class: 'field' }, h('label', { for: 'chal-s2' }, 'Resposta dele'),
+            h('input', { id: 'chal-s2', maxlength: 60, value: d.opponentSide, placeholder: 'Resposta dele', oninput: (e) => { d.opponentSide = e.target.value; } })));
       }
 
       parts.push(userPicker(users, {
