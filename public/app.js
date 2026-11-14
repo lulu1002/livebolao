@@ -1480,8 +1480,8 @@
       opened = true;
     });
     es.addEventListener('update', () => {
-      // pequeno atraso aleatório para não sobrecarregar o servidor
-      setTimeout(refresh, Math.random() * 400);
+      // atraso aleatório para os clientes não recarregarem todos no mesmo instante
+      setTimeout(refresh, Math.random() * 2000);
     });
     es.addEventListener('chat', (ev) => {
       try {

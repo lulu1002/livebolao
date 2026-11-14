@@ -70,8 +70,10 @@ const connectionString = DATABASE_URL.replace(/([?&])sslmode=[^&]*&?/, '$1').rep
 const pool = new Pool({
   connectionString,
   ssl: isLocalDb ? false : { rejectUnauthorized: false },
-  max: 8,
+  max: Number(process.env.DB_POOL_MAX) || 8, // aumente no Render (DB_POOL_MAX) só se o plano do banco permitir
   idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 10000, // não deixa requisição esperando conexão para sempre
+  statement_timeout: 20000,       // consulta presa é cortada em vez de segurar uma conexão
 });
 pool.on('error', (e) => console.error('Erro no pool do Postgres:', e.message));
 
@@ -232,6 +234,22 @@ function limit(name, max, windowMs) {
     if (e.count > max) {
       return res.status(429).json({ error: 'Muitas tentativas. Aguarde alguns minutos e tente de novo.' });
     }
+    next();
+  };
+}
+
+// Mesmo limite, mas por pessoa logada (IP compartilhado, como no 4G, não pune quem não fez nada)
+function limitUser(name, max, windowMs) {
+  return (req, res, next) => {
+    const key = `${name}:u:${req.user ? req.user.id : req.ip}`;
+    const now = Date.now();
+    let e = hits.get(key);
+    if (!e || e.reset < now) {
+      e = { count: 0, reset: now + windowMs };
+      hits.set(key, e);
+    }
+    e.count += 1;
+    if (e.count > max) return res.status(429).json({ error: 'Muitos votos em pouco tempo. Aguarde um instante e tente de novo.' });
     next();
   };
 }
@@ -972,8 +990,15 @@ app.use('/api', (req, res, next) => {
 /* ---------- Atualização em tempo real (Server-Sent Events) ---------- */
 const sseClients = new Set();
 
+// Vários avisos em sequência viram um só: sem isso, 50 votos em 1 minuto fariam todo mundo recarregar 50 vezes
+let broadcastTimer = null;
 function broadcast() {
-  for (const res of sseClients) res.write(`event: update\ndata: ${Date.now()}\n\n`);
+  pollsCache = null; // o que mudou precisa aparecer já no próximo carregamento
+  if (broadcastTimer) return;
+  broadcastTimer = setTimeout(() => {
+    broadcastTimer = null;
+    for (const res of sseClients) res.write(`event: update\ndata: ${Date.now()}\n\n`);
+  }, 800);
 }
 function broadcastChat(payload) {
   const data = JSON.stringify(payload);
@@ -1454,19 +1479,34 @@ async function fetchTopicsWithCounts() {
 }
 
 /* ---------- Enquetes e votos ---------- */
+/* Parte de /api/polls que é igual para todo mundo: guardada por 1,5 s (e descartada a cada alteração, ver broadcast()).
+   Quem chega junto aproveita a mesma consulta em vez de cada um ir ao banco. */
+let pollsCache = null;
+const POLLS_CACHE_MS = 1500;
+function loadPublicPollsData() {
+  if (pollsCache && Date.now() - pollsCache.at < POLLS_CACHE_MS) return pollsCache.promise;
+  const promise = (async () => {
+    const [list, topics, lockVotes, showCreated, chatEnabled, chatMedia, challengesEnabled] = await Promise.all([
+      fetchPolls('where visible'),
+      fetchTopics(),
+      getLockVotes(),
+      getFlag('show_poll_created'),
+      getChatEnabled(),
+      getChatMediaFlags(),
+      challenges.enabled(),
+    ]);
+    const votes = await fetchVotes(list.map((p) => p.id));
+    return { list, votes, topics, lockVotes, showCreated, chatEnabled, chatMedia, challengesEnabled };
+  })();
+  const entry = { at: Date.now(), promise };
+  pollsCache = entry;
+  promise.catch(() => { if (pollsCache === entry) pollsCache = null; });
+  return promise;
+}
+
 app.get('/api/polls', wrap(async (req, res) => {
-  // Tudo que não depende de outra coisa roda junto: cada consulta ao banco é uma ida e volta pela rede
-  const [u, list, topics, lockVotes, showCreated, chatEnabled, chatMedia, challengesEnabled] = await Promise.all([
-    currentUser(req),
-    fetchPolls('where visible'),
-    fetchTopics(),
-    getLockVotes(),
-    getFlag('show_poll_created'),
-    getChatEnabled(),
-    getChatMediaFlags(),
-    challenges.enabled(),
-  ]);
-  const votes = await fetchVotes(list.map((p) => p.id));
+  const [u, shared] = await Promise.all([currentUser(req), loadPublicPollsData()]);
+  const { list, votes, topics, lockVotes, showCreated, chatEnabled, chatMedia, challengesEnabled } = shared;
   const rank = { open: 0, closed: 1, resolved: 2, cancelled: 3 };
   const deadline = (p) => (p.closesAt ? Date.parse(p.closesAt) : Number.MAX_SAFE_INTEGER);
   const polls = list.map((p) => publicPoll(p, votes.get(p.id) || [], u && u.id));
@@ -1554,7 +1594,7 @@ async function castVote(pollId, userId, body) {
   return { poll, votes: votes.get(poll.id) || [] };
 }
 
-app.post('/api/polls/:id/vote', requireUser, wrap(async (req, res) => {
+app.post('/api/polls/:id/vote', requireUser, limitUser('vote', 30, 60 * 1000), wrap(async (req, res) => {
   const r = await castVote(req.params.id, req.user.id, req.body);
   if (r.error) return res.status(r.status).json({ error: r.error });
   const balance = r.poll.odds ? await availableBalance(req.user.id) : null;
@@ -1724,25 +1764,40 @@ app.delete('/api/admin/admins/:id', requireOwner, wrap(async (req, res) => {
 }));
 
 app.get('/api/admin/polls', requireAdmin, wrap(async (req, res) => {
-  const list = await fetchPolls();
+  // Consultas independentes rodam juntas (antes eram ~20 idas ao banco em fila, e as flags do chat eram lidas 3 vezes)
+  const [list, usersRow, topics, mode, streak, notify, notifyResult, notifyClosing, hallVisible, lockVotes,
+    showPollCreated, chatEnabled, chatMedia] = await Promise.all([
+    fetchPolls(),
+    q('select count(*)::int as n from users'),
+    fetchTopicsWithCounts(),
+    getMode(),
+    getStreakRule(),
+    getNotifyEnabled(),
+    getFlag('notify_result'),
+    getFlag('notify_closing'),
+    getFlag('hall_visible'),
+    getLockVotes(),
+    getFlag('show_poll_created'),
+    getChatEnabled(),
+    getChatMediaFlags(),
+  ]);
   const votes = await fetchVotes(list.map((p) => p.id));
-  const users = await q('select count(*)::int as n from users');
   res.json({
     polls: list.map((p) => adminPoll(p, votes.get(p.id) || [])),
-    topics: await fetchTopicsWithCounts(),
-    users: users.rows[0].n,
-    mode: await getMode(),
-    streak: await getStreakRule(),
-    notify: await getNotifyEnabled(),
-    notifyResult: await getFlag('notify_result'),
-    notifyClosing: await getFlag('notify_closing'),
-    hallVisible: await getFlag('hall_visible'),
-    lockVotes: await getLockVotes(),
-    showPollCreated: await getFlag('show_poll_created'),
-    chatEnabled: await getChatEnabled(),
-    chatImages: (await getChatMediaFlags()).images,
-    chatVideos: (await getChatMediaFlags()).videos,
-    chatEmbedLinks: (await getChatMediaFlags()).embedLinks,
+    topics,
+    users: usersRow.rows[0].n,
+    mode,
+    streak,
+    notify,
+    notifyResult,
+    notifyClosing,
+    hallVisible,
+    lockVotes,
+    showPollCreated,
+    chatEnabled,
+    chatImages: chatMedia.images,
+    chatVideos: chatMedia.videos,
+    chatEmbedLinks: chatMedia.embedLinks,
     pushEnabled: PUSH_ENABLED,
   });
 }));

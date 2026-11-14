@@ -119,6 +119,9 @@
     });
     history.replaceState(null, '', tab === 'polls' ? location.pathname : `#${tab}`);
     // Estas abas carregam só quando abertas (a lista de usuários é a mais pesada)
+    if (tab === 'house') loadHouse();
+    if (tab === 'ach') loadAchievements();
+    if (tab === 'hall') loadHall();
     if (tab === 'prizes') loadPrizes();
     if (tab === 'users') loadUsers();
     if (tab === 'challenges') loadChallengesAdmin();
@@ -193,9 +196,12 @@
       renderStreak();
       renderTopics();
       renderList();
-      loadHouse();
-      loadAchievements();
-      loadHall();
+      // Casa, conquistas e pódio são pesados (recalculam o ranking): só recarregam quando a aba está aberta.
+      // As contas da casa também entram uma vez, porque os diálogos de resolver enquete usam essa lista.
+      const tabOn = (t) => $(`#atab-${t}`).getAttribute('aria-selected') === 'true';
+      if (tabOn('house') || !state.houseLoaded) loadHouse();
+      if (tabOn('ach')) loadAchievements();
+      if (tabOn('hall')) loadHall();
     } catch (e) {
       handleError(e);
     }
@@ -1601,6 +1607,7 @@
     try {
       const { accounts } = await api('/api/admin/house-accounts');
       state.house = accounts;
+      state.houseLoaded = true;
       renderHouse();
     } catch (e) {
       handleError(e);
