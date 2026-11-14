@@ -338,9 +338,9 @@
   }
 
   /* ---------- Enquetes ---------- */
-  async function loadPolls() {
+  async function loadPolls(prefetched) {
     try {
-      const data = await api('/api/polls');
+      const data = await (prefetched || api('/api/polls'));
       state.polls = data.polls;
       state.topics = data.topics || [];
       state.lockVotes = Boolean(data.lockVotes);
@@ -579,7 +579,7 @@
       $('#topic-tabs').hidden = true;
       box.append(h('div', { class: 'empty' },
         h('p', {}, state.pollsError),
-        h('button', { class: 'btn', type: 'button', onclick: loadPolls }, 'Tentar de novo')));
+        h('button', { class: 'btn', type: 'button', onclick: () => loadPolls() }, 'Tentar de novo')));
       return;
     }
     if (!state.polls.length) {
@@ -2113,6 +2113,9 @@
     renderWho();
     initNotify();
     showLoginResult();
+    // Pede as enquetes já, em paralelo com /api/me (antes ficava esperando o /api/me terminar)
+    const pollsRequest = api('/api/polls');
+    pollsRequest.catch(() => {});
     try {
       const me = await api('/api/me');
       state.user = me.user;
@@ -2132,7 +2135,7 @@
     updateChatFab();
     if (state.user && state.chatEnabled) loadChat(true);
     route();
-    loadPolls();
+    loadPolls(pollsRequest);
     loadPrizes();
     loadChallenges();
     connectEvents();

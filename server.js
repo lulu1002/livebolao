@@ -1455,8 +1455,17 @@ async function fetchTopicsWithCounts() {
 
 /* ---------- Enquetes e votos ---------- */
 app.get('/api/polls', wrap(async (req, res) => {
-  const u = await currentUser(req);
-  const list = await fetchPolls('where visible');
+  // Tudo que não depende de outra coisa roda junto: cada consulta ao banco é uma ida e volta pela rede
+  const [u, list, topics, lockVotes, showCreated, chatEnabled, chatMedia, challengesEnabled] = await Promise.all([
+    currentUser(req),
+    fetchPolls('where visible'),
+    fetchTopics(),
+    getLockVotes(),
+    getFlag('show_poll_created'),
+    getChatEnabled(),
+    getChatMediaFlags(),
+    challenges.enabled(),
+  ]);
   const votes = await fetchVotes(list.map((p) => p.id));
   const rank = { open: 0, closed: 1, resolved: 2, cancelled: 3 };
   const deadline = (p) => (p.closesAt ? Date.parse(p.closesAt) : Number.MAX_SAFE_INTEGER);
@@ -1468,8 +1477,7 @@ app.get('/api/polls', wrap(async (req, res) => {
   });
   // Saldo só é calculado quando há enquete com odd na página e a pessoa está logada
   const balance = u && polls.some((p) => p.odds) ? await availableBalance(u.id) : null;
-  const [chatEnabled, chatMedia] = await Promise.all([getChatEnabled(), getChatMediaFlags()]);
-  res.json({ polls, topics: await fetchTopics(), lockVotes: await getLockVotes(), showCreated: await getFlag('show_poll_created'), balance, chatEnabled, chatMedia, challengesEnabled: await challenges.enabled() });
+  res.json({ polls, topics, lockVotes, showCreated, balance, chatEnabled, chatMedia, challengesEnabled });
 }));
 
 /* Saldo para apostar = pontos do ranking geral − o que está apostado em enquetes ainda sem resultado */
